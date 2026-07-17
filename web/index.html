@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>NoHandWrite — 手書き入力</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>NoHandWrite 手書き入力</h1>
+    <nav><a href="/"><b>✏️ 入力</b></a><a href="/library.html">📚 ライブラリ</a><a href="/generate.html">🖋 生成</a></nav>
+    <div class="row">
+      <label>書き手ID <input id="writer" placeholder="例: taro" autocomplete="off"></label>
+      <label>文字セット <select id="promptSet"></select></label>
+      <span id="progress" class="badge"></span>
+    </div>
+  </header>
+
+  <section class="prompt-row">
+    <div id="targetChar" class="target">–</div>
+    <div class="prompt-info">
+      <div id="strokeInfo">0 画目</div>
+      <div id="sampleInfo"></div>
+      <div id="setDescription" class="muted"></div>
+    </div>
+  </section>
+
+  <div class="canvas-wrap">
+    <canvas id="pad"></canvas>
+  </div>
+
+  <section class="buttons">
+    <button id="undoStroke">一画戻す</button>
+    <button id="clearAll">全部消す</button>
+    <button id="skip">スキップ</button>
+    <button id="save" class="primary">保存して次へ ▶</button>
+  </section>
+  <p id="status" class="muted"></p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+models/
+# SDT vendored repo: exclude downloaded datasets & weights (kept locally only)
+third_party/SDT/data/
+third_party/SDT/model_zoo/
+.DS_Store

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nohandwrite-server",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}

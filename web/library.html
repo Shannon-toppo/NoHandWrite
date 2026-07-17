@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NoHandWrite — ライブラリ</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .chargrid { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .chargrid button { font-size: 1.3rem; padding: 6px 10px; }
+  .chargrid button .cnt { font-size: 0.7rem; color: #888; display: block; }
+  .chargrid button.active { border-color: #1a7f37; box-shadow: 0 0 0 2px #1a7f3755; }
+  .legend { font-size: 0.85rem; color: #555; margin-top: 6px; }
+  .legend .avg { color: #d22; font-weight: bold; }
+  nav a { margin-right: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>NoHandWrite ライブラリ</h1>
+    <nav><a href="/">✏️ 入力</a><a href="/library.html"><b>📚 ライブラリ</b></a><a href="/generate.html">🖋 生成</a></nav>
+    <div class="row" style="margin-top:8px">
+      <label>書き手 <select id="writerSel"></select></label>
+    </div>
+  </header>
+  <div id="charGrid" class="chargrid"></div>
+  <div class="canvas-wrap"><canvas id="view"></canvas></div>
+  <p class="legend">細線: 各サンプル / <span class="avg">太赤線: 平均文字(フーリエ平均)</span></p>
+  <p id="status" class="muted"></p>
+</main>
+<script src="library.js"></script>
+</body>
+</html>
