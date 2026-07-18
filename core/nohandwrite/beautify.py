@@ -14,7 +14,7 @@ from .strokes import (
 
 @dataclass
 class BeautifyResult:
-    strokes: list[np.ndarray]      # (N, 2) arrays in the 0–1000 standard box
+    strokes: list[np.ndarray]      # (N, 3) x, y, pressure in the 0–1000 box
     used_samples: int
     total_samples: int
     stroke_count: int

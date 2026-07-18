@@ -31,6 +31,11 @@ function params() {
   };
 }
 
+function num(id, fallback) {
+  const v = Number($(id).value);
+  return Number.isFinite(v) ? v : fallback;
+}
+
 function gcodeParams() {
   return {
     feed_draw: Number($("feedDraw").value) || 1500,
@@ -38,6 +43,10 @@ function gcodeParams() {
     pen_up_cmd: $("penUp").value.trim() || "G0 Z5.0",
     pen_down_cmd: $("penDown").value.trim() || "G1 Z0.0 F300",
     flip_y: $("flipY").checked,
+    pressure_width: $("pressWidthChk").checked,
+    pressure_z: $("pressZChk").checked,
+    z_light: num("zLight", 0),
+    z_heavy: num("zHeavy", -0.4),
   };
 }
 
@@ -68,13 +77,28 @@ function drawPreview(data) {
     }
   }
   ctx.strokeStyle = "#111";
-  ctx.lineWidth = 0.4;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const pressOn = $("pressWidthChk").checked;
   for (const s of data.strokes) {
+    const pts = s.points;
+    // points are [x, y] or [x, y, pressure]; with pressure data and the
+    // toggle on, draw per-segment widths matching the SVG export (0.2–1.0mm)
+    if (pressOn && pts[0].length > 2 && pts.some((q) => q[2] > 0)) {
+      for (let i = 1; i < pts.length; i++) {
+        const p = Math.min(Math.max((pts[i - 1][2] + pts[i][2]) / 2, 0), 1);
+        ctx.lineWidth = 0.2 + 0.8 * p;
+        ctx.beginPath();
+        ctx.moveTo(pts[i - 1][0], pts[i - 1][1]);
+        ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.stroke();
+      }
+      continue;
+    }
+    ctx.lineWidth = 0.4;
     ctx.beginPath();
-    ctx.moveTo(s.points[0][0], s.points[0][1]);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i][0], s.points[i][1]);
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
   }
   const nGen = Object.values(data.modes).filter((m) => m === "generated").length;
@@ -149,6 +173,7 @@ for (const id of Object.values(JITTER_IDS)) {
 }
 
 $("ruleChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
+$("pressWidthChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
 
 $("preview").addEventListener("click", preview);
 $("dlGcode").addEventListener("click", () => download("gcode"));

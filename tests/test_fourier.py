@@ -27,8 +27,25 @@ def test_reconstruction_converges():
     s = circle()
     series = analyze_stroke(s, order=32)
     rec = series.reconstruct(100)
-    err = np.hypot(*(rec - s[:, :2]).T)
+    err = np.hypot(*(rec[:, :2] - s[:, :2]).T)
     assert err.mean() < 8.0  # tight fit on the 0-1000 scale
+
+
+def test_smooth_stroke_keeps_pressure():
+    out = smooth_stroke(circle())               # constant pressure 0.5
+    assert out.shape[1] == 3
+    np.testing.assert_allclose(out[:, 2], 0.5, atol=0.02)
+    # strokes without a pressure column come back with pressure 0
+    out = smooth_stroke(circle()[:, :2])
+    assert np.all(out[:, 2] == 0.0)
+
+
+def test_average_averages_pressure():
+    a = [circle()]                              # p = 0.5
+    b = [circle()]
+    b[0][:, 3] = 0.9
+    avg = average_character([a, b])
+    np.testing.assert_allclose(avg[0][:, 2], 0.7, atol=0.02)
 
 
 def test_truncation_smooths_noise():

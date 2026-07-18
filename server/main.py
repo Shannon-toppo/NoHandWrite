@@ -319,6 +319,12 @@ class ExportIn(TypesetIn):
     pen_up_cmd: str = Field(default="G0 Z5.0", max_length=100)
     pen_down_cmd: str = Field(default="G1 Z0.0 F300", max_length=100)
     flip_y: bool = True
+    # pen pressure: SVG variable stroke width / G-code Z-axis modulation
+    # (leave pressure_z off for plotters without Z control)
+    pressure_width: bool = False
+    pressure_z: bool = False
+    z_light: float = Field(default=0.0, ge=-20, le=20)
+    z_heavy: float = Field(default=-0.4, ge=-20, le=20)
 
 
 @app.post("/api/export")
@@ -326,13 +332,15 @@ def export_text(body: ExportIn) -> Response:
     entries = _layout_entries(body)
     layout = body.layout_options()
     if body.format == "svg":
-        content = strokes_to_svg(entries, layout)
+        content = strokes_to_svg(entries, layout,
+                                 pressure_width=body.pressure_width)
         media, fname = "image/svg+xml", "nohandwrite.svg"
     else:
         content = strokes_to_gcode(entries, GCodeOptions(
             layout=layout, feed_draw=body.feed_draw, feed_travel=body.feed_travel,
             pen_up_cmd=body.pen_up_cmd, pen_down_cmd=body.pen_down_cmd,
-            flip_y=body.flip_y))
+            flip_y=body.flip_y, pressure_z=body.pressure_z,
+            z_light=body.z_light, z_heavy=body.z_heavy))
         media, fname = "text/plain", "nohandwrite.gcode"
     return Response(content=content, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})

@@ -2,7 +2,14 @@
 
 Output units are millimeters (native for pen plotters; SVG uses the same
 numbers with a mm viewBox). Line breaks happen at '\n' and when a line
-exceeds `max_width_mm` (in vertical mode that limit is the column height).
+exceeds `max_width_mm` (in vertical mode that limit is the column height),
+with simplified kinsoku shori: characters that may not start a line are
+either pushed to the next line together with the character before them
+(追い出し) or, for 、。,. , allowed to hang past the limit (ぶら下げ);
+opening brackets may not end a line.
+
+Stroke rows are (x, y) or (x, y, pressure); the pressure column is carried
+through placement and simplification untouched.
 """
 from __future__ import annotations
 
@@ -29,6 +36,12 @@ class LayoutOptions:
 
 ASCII_SPACE_ADVANCE = 0.4          # of char_size_mm, proportional mode only
 
+# Kinsoku shori (simplified JIS X 4051 sets).
+LINE_HEAD_FORBIDDEN = (set("、。,..,!?!?ー〜ゝゞヽヾ々」』)]}〉》】〕・::;;")
+                       | SMALL_KANA)
+LINE_END_FORBIDDEN = set("「『([{〈《【〔((")
+HANGING = set("、。,..,")          # may hang past the line limit (ぶら下げ)
+
 # Vertical-writing glyph adjustments (JIS vertical forms, simplified):
 # these characters are drawn rotated 90° clockwise in a column...
 VERTICAL_ROTATE = set("ー〜-−–—=…‥「」『』()()[]〈〉《》【】{}")
@@ -45,7 +58,13 @@ def _vertical_glyph(strokes: list[np.ndarray], char: str,
                     size: float = STANDARD_SIZE) -> list[np.ndarray]:
     """Adjust a glyph (0–1000 box) for vertical writing."""
     if char in VERTICAL_ROTATE:
-        return [np.stack([size - s[:, 1], s[:, 0]], axis=1) for s in strokes]
+        out = []
+        for s in strokes:
+            r = s.copy()
+            r[:, 0] = size - s[:, 1]
+            r[:, 1] = s[:, 0]
+            out.append(r)
+        return out
     anchor = VERTICAL_REANCHOR.get(char)
     if anchor is None:
         return strokes
@@ -54,14 +73,22 @@ def _vertical_glyph(strokes: list[np.ndarray], char: str,
     w, h = pts[:, 0].max() - min_x, pts[:, 1].max() - min_y
     off = np.array([(size - w) * anchor[0] - min_x,
                     (size - h) * anchor[1] - min_y])
-    return [s + off for s in strokes]
+    out = []
+    for s in strokes:
+        r = s.copy()
+        r[:, :2] += off
+        out.append(r)
+    return out
 
 
 def _rdp(points: np.ndarray, eps: float) -> np.ndarray:
-    """Ramer–Douglas–Peucker polyline simplification (iterative)."""
+    """Ramer–Douglas–Peucker polyline simplification (iterative).
+
+    Distances are measured on x/y; kept rows retain their extra columns."""
     n = len(points)
     if n < 3:
         return points
+    xy = points[:, :2]
     keep = np.zeros(n, dtype=bool)
     keep[0] = keep[-1] = True
     stack = [(0, n - 1)]
@@ -69,13 +96,13 @@ def _rdp(points: np.ndarray, eps: float) -> np.ndarray:
         a, b = stack.pop()
         if b - a < 2:
             continue
-        seg = points[b] - points[a]
-        norm = np.hypot(*seg)
-        pts = points[a + 1:b]
+        seg = xy[b] - xy[a]
+        norm = np.hypot(seg[0], seg[1])
+        pts = xy[a + 1:b]
         if norm == 0:
-            d = np.hypot(*(pts - points[a]).T)
+            d = np.hypot(*(pts - xy[a]).T)
         else:
-            rel = pts - points[a]
+            rel = pts - xy[a]
             d = np.abs(seg[0] * rel[:, 1] - seg[1] * rel[:, 0]) / norm
         i = int(np.argmax(d))
         if d[i] > eps:
@@ -89,7 +116,84 @@ def _rdp(points: np.ndarray, eps: float) -> np.ndarray:
 @dataclass
 class PlacedStroke:
     char: str
-    points: np.ndarray             # (N, 2) in mm, absolute page coordinates
+    points: np.ndarray             # (N, 2|3) in mm, absolute page coordinates
+
+
+@dataclass
+class _Item:
+    """One character prepared for layout."""
+    char: str
+    strokes: list[np.ndarray] | None   # 0–1000 box, vertical-adjusted
+    advance: float                     # mm along the writing direction
+    offset: float                      # mm from pen position to ink start
+
+
+def _prepare(entries: list[dict], opts: LayoutOptions) -> list[_Item]:
+    """Glyph strokes, advance width and draw offset for every entry."""
+    axis = 1 if opts.vertical else 0
+    scale = opts.char_size_mm / STANDARD_SIZE
+    items = []
+    for e in entries:
+        char = e["char"]
+        if char == "\n":
+            items.append(_Item("\n", None, 0.0, 0.0))
+            continue
+        strokes = e.get("strokes")
+        if strokes:
+            strokes = [np.asarray(s, dtype=float)[:, :3] for s in strokes]
+            if opts.vertical:
+                strokes = _vertical_glyph(strokes, char)
+        advance, offset = opts.char_size_mm, 0.0
+        if opts.proportional:
+            if strokes:
+                v = np.concatenate([s[:, axis] for s in strokes])
+                advance = (v.max() - v.min()) * scale
+                offset = -v.min() * scale    # ink edge lands on the pen
+            elif char == " ":
+                advance = opts.char_size_mm * ASCII_SPACE_ADVANCE
+        items.append(_Item(char, strokes, advance, offset))
+    return items
+
+
+def _break_lines(items: list[_Item], opts: LayoutOptions) -> list[list[_Item]]:
+    """Split items into lines at '\n' and the length limit, with kinsoku."""
+    limit = opts.max_width_mm
+    lines: list[list[_Item]] = []
+    line: list[_Item] = []
+    pos = 0.0
+    emit_last = True     # emit the final line even when empty ('\n' made it)
+    for it in items:
+        if it.char == "\n":
+            lines.append(line)
+            line, pos = [], 0.0
+            emit_last = True
+            continue
+        if limit is None or not line or pos + it.advance <= limit:
+            line.append(it)
+            pos += it.advance + opts.char_gap_mm
+            emit_last = True
+            continue
+        if it.char in HANGING:
+            # ぶら下げ: the punctuation hangs past the limit, break after it
+            line.append(it)
+            lines.append(line)
+            line, pos = [], 0.0
+            emit_last = False
+            continue
+        # 追い出し: keep line-head-forbidden characters attached to the
+        # character before them, and pull back characters that may not
+        # end a line
+        carry = [it]
+        while line and (carry[0].char in LINE_HEAD_FORBIDDEN
+                        or line[-1].char in LINE_END_FORBIDDEN):
+            carry.insert(0, line.pop())
+        lines.append(line)
+        line = carry
+        pos = sum(c.advance + opts.char_gap_mm for c in carry)
+        emit_last = True
+    if line or emit_last:
+        lines.append(line)
+    return lines
 
 
 def layout_text(entries: list[dict], opts: LayoutOptions | None = None
@@ -97,9 +201,10 @@ def layout_text(entries: list[dict], opts: LayoutOptions | None = None
     """Place characters left-to-right, top-to-bottom (or top-to-bottom,
     right-to-left with `vertical=True`).
 
-    `entries`: [{"char": str, "strokes": list of (N,2) arrays | None}, ...] —
-    entries whose strokes are None advance the pen position but draw nothing
-    (unavailable characters render as blank space); '\n' chars force a break.
+    `entries`: [{"char": str, "strokes": list of (N,2|3) arrays | None}, ...]
+    — entries whose strokes are None advance the pen position but draw
+    nothing (unavailable characters render as blank space); '\n' chars force
+    a break.
 
     In proportional mode (default) each glyph advances by its own ink width;
     ASCII spaces take `ASCII_SPACE_ADVANCE` of a cell, other blanks a full
@@ -111,39 +216,28 @@ def layout_text(entries: list[dict], opts: LayoutOptions | None = None
     if opts.vertical:
         return _layout_vertical(entries, opts)
     scale = opts.char_size_mm / STANDARD_SIZE
+    lines = _break_lines(_prepare(entries, opts), opts)
     line_step = opts.char_size_mm + opts.line_gap_mm
-    x, y = opts.margin_mm, opts.margin_mm
-    max_x = x
     placed: list[PlacedStroke] = []
-    for e in entries:
-        if e["char"] == "\n":
-            x = opts.margin_mm
-            y += line_step
-            continue
-        strokes = e.get("strokes")
-        # advance width and horizontal draw offset of this character
-        advance, x_offset = opts.char_size_mm, 0.0
-        if opts.proportional:
-            if strokes:
-                xs = np.concatenate([np.asarray(s, dtype=float)[:, 0] for s in strokes])
-                advance = (xs.max() - xs.min()) * scale
-                x_offset = -xs.min() * scale     # left ink edge lands on the pen
-            elif e["char"] == " ":
-                advance = opts.char_size_mm * ASCII_SPACE_ADVANCE
-        if opts.max_width_mm is not None and x + advance > opts.max_width_mm + opts.margin_mm:
-            x = opts.margin_mm
-            y += line_step
-        if strokes:
-            for s in strokes:
-                pts = np.asarray(s, dtype=float)[:, :2] * scale
-                pts = pts + np.array([x + x_offset, y])
-                if opts.simplify_mm > 0:
-                    pts = _rdp(pts, opts.simplify_mm)
-                placed.append(PlacedStroke(char=e["char"], points=pts))
-        x += advance + opts.char_gap_mm
-        max_x = max(max_x, x)
+    max_x = opts.margin_mm
+    for row, line in enumerate(lines):
+        x = opts.margin_mm
+        y = opts.margin_mm + row * line_step
+        for it in line:
+            if it.strokes:
+                for s in it.strokes:
+                    pts = s.copy()
+                    pts[:, :2] *= scale
+                    pts[:, 0] += x + it.offset
+                    pts[:, 1] += y
+                    if opts.simplify_mm > 0:
+                        pts = _rdp(pts, opts.simplify_mm)
+                    placed.append(PlacedStroke(char=it.char, points=pts))
+            x += it.advance + opts.char_gap_mm
+            max_x = max(max_x, x)
     width = max_x - opts.char_gap_mm + opts.margin_mm
-    height = y + opts.char_size_mm + opts.margin_mm
+    height = (opts.margin_mm + (len(lines) - 1) * line_step
+              + opts.char_size_mm + opts.margin_mm)
     return placed, (width, height)
 
 
@@ -155,41 +249,26 @@ def _layout_vertical(entries: list[dict], opts: LayoutOptions
     the following ones) and shifted right once the column count is known.
     """
     scale = opts.char_size_mm / STANDARD_SIZE
+    lines = _break_lines(_prepare(entries, opts), opts)
     col_step = opts.char_size_mm + opts.line_gap_mm
-    col, y = 0, opts.margin_mm
-    max_col, max_y = 0, y
     placed: list[PlacedStroke] = []
-    for e in entries:
-        if e["char"] == "\n":
-            col += 1
-            y = opts.margin_mm
-            continue
-        strokes = e.get("strokes")
-        if strokes:
-            strokes = _vertical_glyph(
-                [np.asarray(s, dtype=float)[:, :2] for s in strokes], e["char"])
-        # advance height and vertical draw offset of this character
-        advance, y_offset = opts.char_size_mm, 0.0
-        if opts.proportional:
-            if strokes:
-                ys = np.concatenate([s[:, 1] for s in strokes])
-                advance = (ys.max() - ys.min()) * scale
-                y_offset = -ys.min() * scale     # top ink edge lands on the pen
-            elif e["char"] == " ":
-                advance = opts.char_size_mm * ASCII_SPACE_ADVANCE
-        if opts.max_width_mm is not None and y + advance > opts.max_width_mm + opts.margin_mm:
-            col += 1
-            y = opts.margin_mm
-        if strokes:
-            for s in strokes:
-                pts = s * scale + np.array([-col * col_step, y + y_offset])
-                if opts.simplify_mm > 0:
-                    pts = _rdp(pts, opts.simplify_mm)
-                placed.append(PlacedStroke(char=e["char"], points=pts))
-        y += advance + opts.char_gap_mm
-        max_col = max(max_col, col)
-        max_y = max(max_y, y)
+    max_y = opts.margin_mm
+    for col, line in enumerate(lines):
+        y = opts.margin_mm
+        for it in line:
+            if it.strokes:
+                for s in it.strokes:
+                    pts = s.copy()
+                    pts[:, :2] *= scale
+                    pts[:, 0] += -col * col_step
+                    pts[:, 1] += y + it.offset
+                    if opts.simplify_mm > 0:
+                        pts = _rdp(pts, opts.simplify_mm)
+                    placed.append(PlacedStroke(char=it.char, points=pts))
+            y += it.advance + opts.char_gap_mm
+            max_y = max(max_y, y)
     # shift so the leftmost (last) column starts at the margin
+    max_col = len(lines) - 1
     x_shift = opts.margin_mm + max_col * col_step
     for p in placed:
         p.points[:, 0] += x_shift

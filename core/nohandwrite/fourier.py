@@ -13,6 +13,10 @@ Only cosine coefficients remain, and reconstruction evaluates t in [0, π].
 
 Strokes are resampled to equal arc-length spacing before analysis, so the
 discrete coefficient sums approximate the paper's integrals.
+
+Pen pressure rides along as a third coordinate: it is expanded, averaged and
+truncated exactly like x and y (the truncation order is still chosen from the
+geometry alone), so the average character keeps an averaged pressure profile.
 """
 from __future__ import annotations
 
@@ -36,9 +40,9 @@ class StrokeSeries:
     """Truncated cosine series of one stroke.
 
     a[c, 0] is the constant term; a[c, n] the cos(nt) coefficient for
-    coordinate c (0=x, 1=y).
+    coordinate c (0=x, 1=y, 2=pressure).
     """
-    a: np.ndarray  # (2, order + 1)
+    a: np.ndarray  # (3, order + 1)
 
     @property
     def order(self) -> int:
@@ -48,7 +52,7 @@ class StrokeSeries:
         return StrokeSeries(self.a[:, :min(order, self.order) + 1].copy())
 
     def reconstruct(self, num_points: int = DEFAULT_SAMPLES) -> np.ndarray:
-        """Evaluate the series at `num_points` values of t in [0, π] -> (N, 2)."""
+        """Evaluate the series at `num_points` values of t in [0, π] -> (N, C)."""
         t = np.linspace(0.0, np.pi, num_points)
         n = np.arange(self.order + 1)[:, None]          # (order+1, 1)
         cos = np.cos(n * t)                              # (order+1, N)
@@ -57,13 +61,20 @@ class StrokeSeries:
 
 def analyze_stroke(stroke: np.ndarray, order: int = MAX_ORDER,
                    num_samples: int = DEFAULT_SAMPLES) -> StrokeSeries:
-    """Cosine-series coefficients of a stroke's (x, y) columns up to `order`.
+    """Cosine-series coefficients of a stroke's (x, y, p) columns up to `order`.
 
-    The stroke is resampled to equal arc-length spacing and parameterized
-    uniformly on [0, π]; coefficients of the even extension are
-    a_n = (2/π) ∫_0^π f(t) cos(nt) dt (a_0 halved into the constant term).
+    Accepts (N, 2) x,y; (N, 3) x,y,p; or (N, 4) x,y,t,p rows — missing
+    pressure becomes 0. The stroke is resampled to equal arc-length spacing
+    and parameterized uniformly on [0, π]; coefficients of the even extension
+    are a_n = (2/π) ∫_0^π f(t) cos(nt) dt (a_0 halved into the constant term).
     """
-    pts = resample_stroke(stroke, num_samples)[:, :2]   # (N, 2)
+    res = resample_stroke(stroke, num_samples)
+    if res.shape[1] >= 4:
+        pts = res[:, [0, 1, 3]]                          # (x, y, t, p) rows
+    elif res.shape[1] == 3:
+        pts = res
+    else:
+        pts = np.concatenate([res, np.zeros((len(res), 1))], axis=1)
     n_pts = pts.shape[0]
     t = np.linspace(0.0, np.pi, n_pts)
     dt = np.pi / (n_pts - 1)
@@ -71,8 +82,8 @@ def analyze_stroke(stroke: np.ndarray, order: int = MAX_ORDER,
     w[0] = w[-1] = dt / 2
     orders = np.arange(order + 1)[:, None]               # (order+1, 1)
     cos = np.cos(orders * t)                             # (order+1, N)
-    f = pts.T * w                                        # (2, N) weighted
-    a = 2.0 * (f @ cos.T) / np.pi                        # (2, order+1)
+    f = pts.T * w                                        # (3, N) weighted
+    a = 2.0 * (f @ cos.T) / np.pi                        # (3, order+1)
     a[:, 0] /= 2.0                                       # constant term a0/2
     return StrokeSeries(a)
 
@@ -90,7 +101,7 @@ def auto_truncation_order(series: StrokeSeries,
     small_steps = 0
     for n in range(1, series.order):
         nxt = series.truncated(n + 1).reconstruct(num_points)
-        gap = np.hypot(*(nxt - prev).T).mean()
+        gap = np.hypot(*(nxt - prev)[:, :2].T).mean()    # geometry only
         small_steps = small_steps + 1 if gap <= threshold else 0
         if small_steps >= 2:
             return n - 1
@@ -101,10 +112,14 @@ def auto_truncation_order(series: StrokeSeries,
 def smooth_stroke(stroke: np.ndarray,
                   threshold: float = DEFAULT_TRUNCATION_THRESHOLD,
                   num_points: int = DEFAULT_SAMPLES) -> np.ndarray:
-    """Beautify a single stroke: analyze, auto-truncate, reconstruct."""
+    """Beautify a single stroke: analyze, auto-truncate, reconstruct.
+
+    Returns (N, 3) rows of x, y, pressure (pressure clipped to [0, 1])."""
     series = analyze_stroke(stroke)
     order = auto_truncation_order(series, threshold)
-    return series.truncated(order).reconstruct(num_points)
+    out = series.truncated(order).reconstruct(num_points)
+    out[:, 2] = np.clip(out[:, 2], 0.0, 1.0)
+    return out
 
 
 def _maybe_reverse(stroke: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -125,7 +140,8 @@ def average_character(samples: list[list[np.ndarray]],
     All samples must have the same stroke count (filter first with
     `filter_matching_samples`). Per stroke: coefficients of every sample are
     averaged, then the averaged series is truncated at the order chosen for it
-    and reconstructed. Returns a list of (num_points, 2) arrays.
+    and reconstructed. Returns a list of (num_points, 3) arrays of x, y,
+    pressure (pressure clipped to [0, 1]).
     """
     if not samples:
         raise ValueError("no samples")
@@ -139,7 +155,9 @@ def average_character(samples: list[list[np.ndarray]],
         series_list = [analyze_stroke(_maybe_reverse(s[i], ref)) for s in samples]
         mean = StrokeSeries(a=np.mean([sr.a for sr in series_list], axis=0))
         order = auto_truncation_order(mean, threshold)
-        result.append(mean.truncated(order).reconstruct(num_points))
+        rec = mean.truncated(order).reconstruct(num_points)
+        rec[:, 2] = np.clip(rec[:, 2], 0.0, 1.0)
+        result.append(rec)
     return result
 
 

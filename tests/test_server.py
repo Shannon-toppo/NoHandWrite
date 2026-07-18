@@ -90,8 +90,8 @@ def test_typeset_repeated_chars_vary(client):
     data = client.post("/api/typeset", json=body).json()
     first, second = (s["points"] for s in data["strokes"][:2])
     # align the second occurrence back onto the first cell (15mm default step)
-    shifted = [[x - 15, y] for x, y in second]
-    assert shifted != first
+    shifted = [[x - 15, y] for x, y, *_ in second]
+    assert shifted != [[x, y] for x, y, *_ in first]
 
 
 def test_typeset_negative_char_gap(client):
@@ -129,10 +129,11 @@ def test_typeset_per_category_jitter(client):
     kanji_a, kanji_b = by_char["木"]
     alnum_a, alnum_b = by_char["A"]
     step = 15  # default char_size_mm, gap 0
-    assert [[x - step, y] for x, y in kanji_b] != kanji_a       # kanji varies
+    assert ([[x - step, y] for x, y, *_ in kanji_b]
+            != [[x, y] for x, y, *_ in kanji_a])                # kanji varies
     # alnum jitter 0 -> both A occurrences identical modulo layout offset
-    shifted = [[round(x - step, 3), round(y, 3)] for x, y in alnum_b]
-    assert shifted == [[round(x, 3), round(y, 3)] for x, y in alnum_a]
+    shifted = [[round(x - step, 3), round(y, 3)] for x, y, *_ in alnum_b]
+    assert shifted == [[round(x, 3), round(y, 3)] for x, y, *_ in alnum_a]
 
 
 def test_export_gcode_custom_pen(client):
@@ -146,6 +147,22 @@ def test_export_gcode_custom_pen(client):
     assert r.status_code == 200
     g = r.text
     assert "M3 S90" in g and "M3 S40" in g and "F800" in g
+
+
+def test_export_pressure_options(client):
+    client.post("/api/samples", json=sample_body(char="木"))   # p 0.5 / 0.4
+    base = {"writer": "taro", "text": "木", "jitter": 0}
+    g = client.post("/api/export", json={**base, "format": "gcode",
+                                         "pressure_z": True,
+                                         "z_light": 0.0, "z_heavy": -1.0}).text
+    assert " Z-0." in g                       # modulated depth on draw moves
+    assert "G1 Z0.0 F300" not in g
+    svg = client.post("/api/export", json={**base, "format": "svg",
+                                           "pressure_width": True}).text
+    assert '<path' in svg and 'stroke-width="0.' in svg
+    # per-path width attributes only appear in pressure mode
+    plain = client.post("/api/export", json={**base, "format": "svg"}).text
+    assert plain.count("stroke-width") == 1   # just the group default
 
 
 def test_save_and_fetch(client):
