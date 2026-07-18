@@ -235,13 +235,15 @@ class TypesetIn(BaseModel):
     line_gap_mm: float = Field(default=4.0, ge=0, le=100)
     max_width_mm: float = Field(default=180.0, gt=0, le=2000)
     margin_mm: float = Field(default=10.0, ge=0, le=100)
+    proportional: bool = True
 
     def layout_options(self) -> LayoutOptions:
         return LayoutOptions(char_size_mm=self.char_size_mm,
                              char_gap_mm=self.char_gap_mm,
                              line_gap_mm=self.line_gap_mm,
                              max_width_mm=self.max_width_mm,
-                             margin_mm=self.margin_mm)
+                             margin_mm=self.margin_mm,
+                             proportional=self.proportional)
 
 
 def _layout_entries(body: TypesetIn) -> list[dict]:

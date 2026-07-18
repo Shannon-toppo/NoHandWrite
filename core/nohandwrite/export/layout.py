@@ -21,6 +21,10 @@ class LayoutOptions:
     max_width_mm: float | None = 180.0
     margin_mm: float = 10.0
     simplify_mm: float = 0.05      # RDP tolerance; 0 disables
+    proportional: bool = True      # advance by each glyph's ink width
+                                   # (False: fixed char_size_mm cells)
+
+ASCII_SPACE_ADVANCE = 0.4          # of char_size_mm, proportional mode only
 
 
 def _rdp(points: np.ndarray, eps: float) -> np.ndarray:
@@ -66,11 +70,14 @@ def layout_text(entries: list[dict], opts: LayoutOptions | None = None
     entries whose strokes are None advance the pen position but draw nothing
     (unavailable characters render as blank space); '\n' chars force a break.
 
+    In proportional mode (default) each glyph advances by its own ink width;
+    ASCII spaces take `ASCII_SPACE_ADVANCE` of a cell, other blanks a full
+    cell. In fixed mode every character advances by char_size_mm.
+
     Returns (placed strokes, (page_width_mm, page_height_mm)).
     """
     opts = opts or LayoutOptions()
     scale = opts.char_size_mm / STANDARD_SIZE
-    step = opts.char_size_mm + opts.char_gap_mm
     line_step = opts.char_size_mm + opts.line_gap_mm
     x, y = opts.margin_mm, opts.margin_mm
     max_x = x
@@ -80,18 +87,27 @@ def layout_text(entries: list[dict], opts: LayoutOptions | None = None
             x = opts.margin_mm
             y += line_step
             continue
-        if opts.max_width_mm is not None and x + opts.char_size_mm > opts.max_width_mm + opts.margin_mm:
+        strokes = e.get("strokes")
+        # advance width and horizontal draw offset of this character
+        advance, x_offset = opts.char_size_mm, 0.0
+        if opts.proportional:
+            if strokes:
+                xs = np.concatenate([np.asarray(s, dtype=float)[:, 0] for s in strokes])
+                advance = (xs.max() - xs.min()) * scale
+                x_offset = -xs.min() * scale     # left ink edge lands on the pen
+            elif e["char"] == " ":
+                advance = opts.char_size_mm * ASCII_SPACE_ADVANCE
+        if opts.max_width_mm is not None and x + advance > opts.max_width_mm + opts.margin_mm:
             x = opts.margin_mm
             y += line_step
-        strokes = e.get("strokes")
         if strokes:
             for s in strokes:
                 pts = np.asarray(s, dtype=float)[:, :2] * scale
-                pts = pts + np.array([x, y])
+                pts = pts + np.array([x + x_offset, y])
                 if opts.simplify_mm > 0:
                     pts = _rdp(pts, opts.simplify_mm)
                 placed.append(PlacedStroke(char=e["char"], points=pts))
-        x += step
+        x += advance + opts.char_gap_mm
         max_x = max(max_x, x)
     width = max_x - opts.char_gap_mm + opts.margin_mm
     height = y + opts.char_size_mm + opts.margin_mm

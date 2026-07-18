@@ -64,7 +64,8 @@ def test_typeset_repeated_chars_vary(client):
 def test_typeset_negative_char_gap(client):
     for _ in range(2):
         client.post("/api/samples", json=sample_body(char="木"))
-    body = {"writer": "taro", "text": "木木", "jitter": 0, "char_gap_mm": -5}
+    body = {"writer": "taro", "text": "木木", "jitter": 0, "char_gap_mm": -5,
+            "proportional": False}
     r = client.post("/api/typeset", json=body)
     assert r.status_code == 200
     a, b = (s["points"] for s in r.json()["strokes"][:2])
@@ -76,7 +77,7 @@ def test_typeset_per_category_jitter(client):
         for _ in range(2):
             client.post("/api/samples", json=sample_body(char=char))
     body = {"writer": "taro", "text": "木木AA", "char_gap_mm": 0,
-            "jitter": {"kanji": 1.0, "alnum": 0}}
+            "proportional": False, "jitter": {"kanji": 1.0, "alnum": 0}}
     data = client.post("/api/typeset", json=body).json()
     by_char = {}
     for s in data["strokes"]:

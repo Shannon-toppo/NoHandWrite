@@ -26,6 +26,7 @@ function params() {
     line_gap_mm: Number($("lineGap").value) || 0,
     max_width_mm: Number($("maxWidth").value) || 180,
     margin_mm: Number($("margin").value) || 0,
+    proportional: $("propChk").checked,
   };
 }
 
