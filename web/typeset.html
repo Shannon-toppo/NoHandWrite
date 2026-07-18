@@ -43,17 +43,18 @@
     <div class="params">
       <label>用紙 <select id="paperSel">
         <option value="">自由</option>
-        <option value="210">A4 縦</option>
-        <option value="297">A4 横</option>
-        <option value="182">B5 縦</option>
-        <option value="257">B5 横</option>
+        <option value="210x297">A4 縦</option>
+        <option value="297x210">A4 横</option>
+        <option value="182x257">B5 縦</option>
+        <option value="257x182">B5 横</option>
       </select></label>
       <label>文字サイズ <input id="charSize" type="number" value="15" min="1" max="200" step="0.5"></label>
       <label>文字間 <input id="charGap" type="number" value="1.5" min="-10" max="100" step="0.5"></label>
       <label>行間 <input id="lineGap" type="number" value="4" min="0" max="100" step="0.5"></label>
-      <label>行の最大幅 <input id="maxWidth" type="number" value="180" min="10" max="2000" step="5"></label>
+      <label>行の最大長 <input id="maxWidth" type="number" value="180" min="10" max="2000" step="5"></label>
       <label>余白 <input id="margin" type="number" value="10" min="0" max="100" step="1"></label>
       <label><input type="checkbox" id="propChk" checked> 可変幅(字幅で送る。オフで等幅)</label>
+      <label><input type="checkbox" id="vertChk"> 縦書き(右から左へ改行)</label>
     </div>
   </fieldset>
 

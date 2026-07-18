@@ -27,6 +27,7 @@ function params() {
     max_width_mm: Number($("maxWidth").value) || 180,
     margin_mm: Number($("margin").value) || 0,
     proportional: $("propChk").checked,
+    vertical: $("vertChk").checked,
   };
 }
 
@@ -112,17 +113,20 @@ async function download(format) {
   }
 }
 
-/* Paper presets: the select holds the paper width in mm; the writable line
- * width is paper minus both margins. Height is not constrained (the page
- * grows with the text), so the preset only drives 行の最大幅. */
+/* Paper presets: the select holds "WxH" in mm; the writable line length is
+ * the paper dimension along the writing direction (width horizontally,
+ * height vertically) minus both margins. The cross direction is not
+ * constrained (the page grows with the text). */
 function applyPaper() {
-  const paperW = Number($("paperSel").value);
-  if (!paperW) return;
+  const v = $("paperSel").value;
+  if (!v) return;
+  const [w, h] = v.split("x").map(Number);
   const margin = Number($("margin").value) || 0;
-  $("maxWidth").value = paperW - 2 * margin;
+  $("maxWidth").value = ($("vertChk").checked ? h : w) - 2 * margin;
 }
 $("paperSel").addEventListener("change", applyPaper);
 $("margin").addEventListener("input", applyPaper);
+$("vertChk").addEventListener("change", applyPaper);
 $("maxWidth").addEventListener("input", () => { $("paperSel").value = ""; });
 
 for (const id of Object.values(JITTER_IDS)) {

@@ -72,6 +72,17 @@ def test_typeset_negative_char_gap(client):
     assert b[0][0] - a[0][0] == 10           # step = 15 (size) - 5 (gap)
 
 
+def test_typeset_vertical(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {"writer": "taro", "text": "木木", "jitter": 0, "char_gap_mm": 0,
+            "proportional": False, "vertical": True}
+    data = client.post("/api/typeset", json=body).json()
+    a, b = (s["points"] for s in data["strokes"][:2])
+    assert abs(b[0][0] - a[0][0]) < 1e-6           # same column
+    assert b[0][1] - a[0][1] == 15                 # second char one cell below
+
+
 def test_typeset_per_category_jitter(client):
     for char in ("木", "A"):
         for _ in range(2):
