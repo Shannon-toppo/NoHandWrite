@@ -24,13 +24,34 @@ def test_layout_places_and_wraps():
 
 def test_layout_newline_and_blank():
     opts = LayoutOptions(char_size_mm=10, margin_mm=0, char_gap_mm=0, line_gap_mm=0,
-                         max_width_mm=None)
+                         max_width_mm=None, proportional=False)
     entries = [char_entry("a"), {"char": "\n"}, {"char": " ", "strokes": None}, char_entry("b")]
     placed, _ = layout_text(entries, opts)
     a = [p for p in placed if p.char == "a"][0]
     b = [p for p in placed if p.char == "b"][0]
     assert b.points[:, 1].min() >= a.points[:, 1].min() + 10   # next line
     assert b.points[:, 0].min() >= 10                           # after the blank
+
+def test_layout_proportional_advance():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=None, simplify_mm=0)
+    narrow = {"char": "i", "strokes": [np.array([[480, 0], [520, 1000]], dtype=float)]}
+    wide = {"char": "w", "strokes": [np.array([[0, 0], [1000, 300]], dtype=float)]}
+    placed, (w, _) = layout_text([narrow, wide, narrow], opts)
+    # each glyph's left ink edge lands on the pen; advance = its ink width
+    assert abs(placed[0].points[:, 0].min() - 0.0) < 1e-9
+    assert abs(placed[1].points[:, 0].min() - 0.4) < 1e-9    # after narrow (40/1000*10)
+    assert abs(placed[2].points[:, 0].min() - 10.4) < 1e-9   # after wide (full box)
+    assert abs(w - 10.8) < 1e-9
+
+
+def test_layout_proportional_ascii_space():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=None, simplify_mm=0)
+    narrow = {"char": "i", "strokes": [np.array([[480, 0], [520, 1000]], dtype=float)]}
+    placed, _ = layout_text([{"char": " ", "strokes": None}, narrow], opts)
+    assert abs(placed[0].points[:, 0].min() - 4.0) < 1e-9    # 0.4 of a 10mm cell
+
 
 def test_svg_output():
     svg = strokes_to_svg([char_entry(n_strokes=3)])
