@@ -105,6 +105,29 @@ def normalize_strokes(strokes: list[np.ndarray], size: float = STANDARD_SIZE) ->
     return out
 
 
+def normalize_to_field(strokes: list[np.ndarray], canvas: tuple[float, float],
+                       size: float = STANDARD_SIZE) -> list[np.ndarray]:
+    """Map strokes from their capture field into the [0, size] square,
+    preserving the character's size and position within the field.
+
+    Unlike `normalize_strokes` (which fits the glyph's bounding box to the
+    box and is right for comparing shapes), this keeps small kana, punctuation
+    and their placement exactly as written: the whole input field maps to the
+    standard box.
+    """
+    cw, ch = canvas
+    scale = size / max(cw, ch) if max(cw, ch) > 0 else 1.0
+    off_x = (size - cw * scale) / 2.0
+    off_y = (size - ch * scale) / 2.0
+    out = []
+    for s in strokes:
+        r = s.copy()
+        r[:, 0] = r[:, 0] * scale + off_x
+        r[:, 1] = r[:, 1] * scale + off_y
+        out.append(r)
+    return out
+
+
 def stroke_length(stroke: np.ndarray) -> float:
     if len(stroke) < 2:
         return 0.0

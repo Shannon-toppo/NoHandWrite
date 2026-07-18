@@ -25,6 +25,42 @@ def test_prompts(client):
     assert "style" in sets and "hiragana" in sets and "alnum" in sets
     assert len(sets["hiragana"]["chars"]) == 71
     assert len(sets["alnum"]["chars"]) == 62
+    assert len(sets["style_alnum"]["chars"]) == 87
+    assert list(sets)[0] == "style_alnum"      # default set in the capture UI
+    assert "、" in sets["symbols"]["chars"] and "「" in sets["symbols"]["chars"]
+    assert len(sets["style"]["chars"]) == 25
+
+
+def test_typeset_layout(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {
+        "writer": "taro", "text": "木木\n木", "smooth": True,
+        "char_size_mm": 10, "char_gap_mm": 2, "line_gap_mm": 5,
+        "max_width_mm": 100, "margin_mm": 5,
+    }
+    r = client.post("/api/typeset", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["modes"]["木"] == "average"
+    assert len(data["strokes"]) == 3           # one stroke per 木 sample here
+    ys = [min(p[1] for p in s["points"]) for s in data["strokes"]]
+    assert max(ys) >= min(ys) + 15             # second line is size+gap lower
+    w, h = data["page"]
+    assert w > 20 and h > 25
+
+
+def test_export_gcode_custom_pen(client):
+    client.post("/api/samples", json=sample_body(char="木"))
+    body = {
+        "writer": "taro", "text": "木", "format": "gcode",
+        "pen_up_cmd": "M3 S40", "pen_down_cmd": "M3 S90",
+        "feed_draw": 800, "flip_y": False,
+    }
+    r = client.post("/api/export", json=body)
+    assert r.status_code == 200
+    g = r.text
+    assert "M3 S90" in g and "M3 S40" in g and "F800" in g
 
 
 def test_save_and_fetch(client):

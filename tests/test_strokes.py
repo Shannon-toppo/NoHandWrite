@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from nohandwrite.strokes import (
-    CharacterData, Sample, normalize_strokes, resample_stroke, stroke_length,
+    CharacterData, Sample, normalize_strokes, normalize_to_field,
+    resample_stroke, stroke_length,
 )
 from nohandwrite.store import Store
 
@@ -23,6 +24,17 @@ def test_normalize_preserves_aspect():
     assert center == pytest.approx(500)
     # t/p untouched
     assert list(pts[:, 3]) == [0.5, 0.5, 0.5]
+
+
+def test_normalize_to_field_keeps_size_and_position():
+    # a small mark in the bottom-left of a 450px field (like 。)
+    dot = np.array([[40, 380, 0, 0.5], [80, 420, 10, 0.5]], dtype=float)
+    out = normalize_to_field([dot], canvas=(450, 450))[0]
+    scale = 1000 / 450
+    assert out[0, 0] == pytest.approx(40 * scale)
+    assert out[1, 1] == pytest.approx(420 * scale)
+    # stays small: ~89 units, not blown up to the full box
+    assert (out[1, 0] - out[0, 0]) == pytest.approx(40 * scale)
 
 
 def test_resample_equal_spacing():

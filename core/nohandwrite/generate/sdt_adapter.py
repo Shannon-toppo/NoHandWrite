@@ -27,6 +27,21 @@ NUM_STYLE_IMGS = 15   # matches MODEL.NUM_IMGS of the Japanese config
 IMG_SIZE = 64
 MAX_SEQ_LEN = 120
 
+# SDT was trained on per-glyph-normalized data, so it loses the relative size
+# of small kana; place its output for these characters manually
+# (horizontal-writing convention: smaller, toward the bottom left).
+SMALL_KANA = set("っゃゅょぁぃぅぇぉゎゕゖッャュョァィゥェォヮヵヶ")
+SMALL_KANA_SCALE = 0.62
+
+
+def shrink_small_kana(strokes: list[np.ndarray], size: float = 1000.0) -> list[np.ndarray]:
+    """Scale full-box strokes down and anchor them bottom-left."""
+    s = SMALL_KANA_SCALE
+    off_x = size * 0.04
+    off_y = size * (0.96 - s)
+    return [np.stack([st[:, 0] * s + off_x, st[:, 1] * s + off_y], axis=1)
+            for st in strokes]
+
 
 def render_style_image(strokes: list[np.ndarray], size: int = IMG_SIZE,
                        supersample: int = 4, width: int = 5) -> np.ndarray:
@@ -162,5 +177,8 @@ class SDTGenerator:
                         continue
                     with_tp = [np.concatenate(
                         [s, np.zeros((len(s), 2))], axis=1) for s in strokes]
-                    result[c] = [s[:, :2] for s in normalize_strokes(with_tp)]
+                    normalized = [s[:, :2] for s in normalize_strokes(with_tp)]
+                    if c in SMALL_KANA:
+                        normalized = shrink_small_kana(normalized)
+                    result[c] = normalized
         return result

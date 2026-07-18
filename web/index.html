@@ -10,11 +10,20 @@
 <main>
   <header>
     <h1>NoHandWrite 手書き入力</h1>
-    <nav><a href="/"><b>✏️ 入力</b></a><a href="/library.html">📚 ライブラリ</a><a href="/generate.html">🖋 生成</a></nav>
+    <nav><a href="/"><b>✏️ 入力</b></a><a href="/library.html">📚 ライブラリ</a><a href="/generate.html">🖋 生成</a><a href="/typeset.html">🖨 組版</a></nav>
     <div class="row">
       <label>書き手ID <input id="writer" placeholder="例: taro" autocomplete="off"></label>
       <label>文字セット <select id="promptSet"></select></label>
       <span id="progress" class="badge"></span>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label>回数 <input id="repeat" type="number" min="1" max="10" value="1" style="width:3.5em"></label>
+      <select id="repeatOrder">
+        <option value="loop">セット全体をN周(推奨)</option>
+        <option value="consecutive">同じ文字を連続N回</option>
+      </select>
+      <label>入力枠 <input id="padSize" type="range" min="250" max="850" step="10" value="560" style="width:8em">
+        <span id="padSizeVal" class="muted"></span></label>
     </div>
   </header>
 

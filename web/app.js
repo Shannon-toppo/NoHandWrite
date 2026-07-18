@@ -12,6 +12,7 @@ const ctx = canvas.getContext("2d");
 let promptSets = {};
 let currentSet = null;   // key into promptSets
 let queue = [];          // remaining chars in current set
+let queueTotal = 0;      // initial queue length (chars × repeat)
 let currentChar = null;
 let strokes = [];        // finished strokes: arrays of {x,y,t,p}
 let live = null;         // stroke being drawn
@@ -123,8 +124,8 @@ function updatePromptView() {
   target.classList.toggle("latin", isLatin);
   target.classList.toggle("kso", !!currentChar && !isLatin);
   $("setDescription").textContent = set ? set.description : "";
-  const total = set ? set.chars.length : 0;
-  $("progress").textContent = set ? `${total - queue.length - (currentChar ? 1 : 0) + (currentChar ? 0 : 0)} / ${total}` : "";
+  const done = queueTotal - queue.length - (currentChar ? 1 : 0);
+  $("progress").textContent = set ? `${done} / ${queueTotal}` : "";
   const n = currentChar ? (summary[currentChar] || 0) : 0;
   $("sampleInfo").textContent = currentChar ? `この文字の保存済み: ${n} 回` : "このセットは完了です";
 }
@@ -147,13 +148,54 @@ async function loadSummary() {
   updatePromptView();
 }
 
+function repeatSettings() {
+  const n = Math.max(1, Math.min(10, Number($("repeat").value) || 1));
+  return { n, order: $("repeatOrder").value };
+}
+
 function startSet(key) {
   currentSet = key;
-  queue = [...promptSets[key].chars];
+  const chars = [...promptSets[key].chars];
+  const { n, order } = repeatSettings();
+  if (order === "consecutive") {
+    queue = chars.flatMap((c) => Array(n).fill(c));   // ああ…いい…
+  } else {
+    queue = Array(n).fill(chars).flat();               // あい…ん あい…ん
+  }
+  queueTotal = queue.length;
   nextChar();
 }
 
 $("promptSet").addEventListener("change", (e) => startSet(e.target.value));
+for (const id of ["repeat", "repeatOrder"]) {
+  $(id).addEventListener("change", () => {
+    localStorage.setItem("nhw-repeat", $("repeat").value);
+    localStorage.setItem("nhw-order", $("repeatOrder").value);
+    if (currentSet) { startSet(currentSet); setStatus("回数設定を変更したためセットを最初からやり直します"); }
+  });
+}
+
+/* --- input pad size --- */
+function setPadSize(px, keepStrokes = true) {
+  px = Math.max(250, Math.min(850, px));
+  const wrap = canvas.parentElement;
+  const before = cssSize().w;
+  wrap.style.width = `min(${px}px, 100%)`;
+  document.querySelector("main").style.width = `min(${Math.max(560, px)}px, 100%)`;
+  $("padSizeVal").textContent = `${px}px`;
+  const after = canvas.getBoundingClientRect().width;
+  if (keepStrokes && before > 0 && after > 0 && before !== after) {
+    const r = after / before;                      // rescale in-progress strokes
+    for (const s of strokes) for (const p of s) { p.x *= r; p.y *= r; }
+    if (live) for (const p of live) { p.x *= r; p.y *= r; }
+  }
+  resizeCanvas();
+}
+
+$("padSize").addEventListener("input", () => {
+  localStorage.setItem("nhw-padsize", $("padSize").value);
+  setPadSize(Number($("padSize").value));
+});
 $("writer").addEventListener("change", () => {
   localStorage.setItem("nhw-writer", $("writer").value.trim());
   loadSummary();
@@ -194,6 +236,10 @@ $("save").addEventListener("click", async () => {
 async function init() {
   const saved = localStorage.getItem("nhw-writer");
   if (saved) $("writer").value = saved;
+  $("repeat").value = localStorage.getItem("nhw-repeat") || "1";
+  $("repeatOrder").value = localStorage.getItem("nhw-order") || "loop";
+  setPadSize(Number(localStorage.getItem("nhw-padsize")) || 560, false);
+  $("padSize").value = String(Math.max(250, Math.min(850, Number(localStorage.getItem("nhw-padsize")) || 560)));
   const res = await fetch("/api/prompts");
   promptSets = await res.json();
   const sel = $("promptSet");

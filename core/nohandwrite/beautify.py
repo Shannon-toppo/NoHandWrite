@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .fourier import average_character, filter_matching_samples, smooth_stroke
-from .strokes import STANDARD_SIZE, CharacterData, normalize_strokes
+from .strokes import STANDARD_SIZE, CharacterData, normalize_to_field
 
 
 @dataclass
@@ -33,9 +33,11 @@ def beautify(data: CharacterData, threshold: float | None = None) -> BeautifyRes
     Fourier smoothing of the single sample otherwise.
 
     Samples whose stroke count differs from the majority are excluded.
+    Normalization is field-relative, so small kana / punctuation keep the
+    size and position they were written with.
     """
     kwargs = {} if threshold is None else {"threshold": threshold}
-    normalized = [normalize_strokes(s.strokes) for s in data.samples]
+    normalized = [normalize_to_field(s.strokes, s.canvas) for s in data.samples]
     kept, stroke_count = filter_matching_samples(normalized)
     if not kept:
         raise ValueError("no samples")

@@ -87,3 +87,19 @@ def test_beautify_modes():
     body = r.to_json()
     assert body["strokeCount"] == 1
     assert len(body["strokes"][0]) > 10
+
+
+def test_beautify_keeps_small_characters_small():
+    # 。-like small mark in the bottom-left of a 450px field
+    arc = np.stack([60 + 30 * np.cos(np.linspace(0, 2 * np.pi, 40)),
+                    390 + 30 * np.sin(np.linspace(0, 2 * np.pi, 40)),
+                    np.linspace(0, 200, 40), np.full(40, 0.5)], axis=1)
+    data = CharacterData(char="。", writer="w",
+                         samples=[Sample(strokes=[arc.copy()], canvas=(450, 450)),
+                                  Sample(strokes=[arc + [4, -3, 0, 0]], canvas=(450, 450))])
+    r = beautify(data)
+    pts = np.concatenate(r.strokes)
+    width = pts[:, 0].max() - pts[:, 0].min()
+    assert width < 250                      # not blown up to the full box
+    assert pts[:, 1].mean() > 700           # stays in the lower part
+    assert pts[:, 0].mean() < 300           # …and on the left

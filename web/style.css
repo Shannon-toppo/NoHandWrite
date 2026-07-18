@@ -15,9 +15,15 @@ header h1 { font-size: 1.1rem; margin-bottom: 8px; }
 .prompt-row { display: flex; align-items: center; gap: 16px; margin: 10px 0 6px; }
 .target { font-size: 6rem; line-height: 1; min-width: 1.2em; text-align: center;
           background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 8px 12px; }
-/* kanji/kana: Kanji Stroke Order Font (locally installed) shows stroke-order
-   numbers; latin/digits: gothic (sans-serif) */
-.target.kso { font-family: "KanjiStrokeOrders", "Kanji Stroke Order Font", "Hiragino Sans", serif; }
+/* kanji/kana: Kanji Stroke Order Font shows stroke-order numbers.
+   Served as a webfont so iPads etc. don't need it installed;
+   local() skips the 6.6MB download on machines that have it. */
+@font-face {
+  font-family: "KSO Web";
+  src: local("KanjiStrokeOrders"), url("fonts/KanjiStrokeOrders.woff2") format("woff2");
+  font-display: swap;
+}
+.target.kso { font-family: "KSO Web", "KanjiStrokeOrders", "Hiragino Sans", serif; }
 .target.latin { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; }
 .prompt-info { font-size: 0.95rem; }
 .muted { color: #888; font-size: 0.85rem; margin-top: 4px; }

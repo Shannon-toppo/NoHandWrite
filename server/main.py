@@ -15,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from nohandwrite.beautify import beautify
-from nohandwrite.export import GCodeOptions, LayoutOptions, strokes_to_gcode, strokes_to_svg
+from nohandwrite.export import (
+    GCodeOptions, LayoutOptions, layout_text, strokes_to_gcode, strokes_to_svg,
+)
 from nohandwrite.fourier import smooth_stroke
 from nohandwrite.generate import SDTGenerator
 from nohandwrite.store import Store
@@ -186,17 +188,26 @@ def generate_text(body: GenerateIn) -> dict:
             "chars": [{"char": c, **entries[c]} for c in chars]}
 
 
-class ExportIn(BaseModel):
+class TypesetIn(BaseModel):
+    """Text + layout parameters (millimeters) shared by preview and export."""
     writer: str
     text: str = Field(min_length=1, max_length=2000)
     smooth: bool = True
-    format: str = Field(default="svg", pattern="^(svg|gcode)$")
     char_size_mm: float = Field(default=15.0, gt=0, le=200)
+    char_gap_mm: float = Field(default=1.5, ge=0, le=100)
+    line_gap_mm: float = Field(default=4.0, ge=0, le=100)
     max_width_mm: float = Field(default=180.0, gt=0, le=2000)
+    margin_mm: float = Field(default=10.0, ge=0, le=100)
+
+    def layout_options(self) -> LayoutOptions:
+        return LayoutOptions(char_size_mm=self.char_size_mm,
+                             char_gap_mm=self.char_gap_mm,
+                             line_gap_mm=self.line_gap_mm,
+                             max_width_mm=self.max_width_mm,
+                             margin_mm=self.margin_mm)
 
 
-@app.post("/api/export")
-def export_text(body: ExportIn) -> Response:
+def _layout_entries(body: TypesetIn) -> list[dict]:
     chars = [c for c in dict.fromkeys(body.text) if not c.isspace()]
     charmap = _render_chars(body.writer, chars, body.smooth)
     entries = []
@@ -206,16 +217,61 @@ def export_text(body: ExportIn) -> Response:
         elif c.isspace():
             entries.append({"char": c, "strokes": None})
         else:
-            entries.append({"char": c, "strokes": charmap[c].get("strokes")})
-    layout = LayoutOptions(char_size_mm=body.char_size_mm, max_width_mm=body.max_width_mm)
+            entries.append({"char": c, "strokes": charmap[c].get("strokes"),
+                            "mode": charmap[c]["mode"]})
+    return entries
+
+
+@app.post("/api/typeset")
+def typeset_preview(body: TypesetIn) -> dict:
+    """Layout preview: placed strokes in absolute page millimeters."""
+    entries = _layout_entries(body)
+    placed, (w, h) = layout_text(entries, body.layout_options())
+    modes = {e["char"]: e.get("mode") for e in entries if e.get("mode")}
+    return {
+        "page": [round(w, 2), round(h, 2)],
+        "strokes": [{"char": p.char, "points": p.points.round(3).tolist()} for p in placed],
+        "modes": modes,
+    }
+
+
+class ExportIn(TypesetIn):
+    format: str = Field(default="gcode", pattern="^(svg|gcode)$")
+    feed_draw: float = Field(default=1500.0, gt=0, le=20000)
+    feed_travel: float = Field(default=3000.0, gt=0, le=20000)
+    pen_up_cmd: str = Field(default="G0 Z5.0", max_length=100)
+    pen_down_cmd: str = Field(default="G1 Z0.0 F300", max_length=100)
+    flip_y: bool = True
+
+
+@app.post("/api/export")
+def export_text(body: ExportIn) -> Response:
+    entries = _layout_entries(body)
+    layout = body.layout_options()
     if body.format == "svg":
         content = strokes_to_svg(entries, layout)
         media, fname = "image/svg+xml", "nohandwrite.svg"
     else:
-        content = strokes_to_gcode(entries, GCodeOptions(layout=layout))
+        content = strokes_to_gcode(entries, GCodeOptions(
+            layout=layout, feed_draw=body.feed_draw, feed_travel=body.feed_travel,
+            pen_up_cmd=body.pen_up_cmd, pen_down_cmd=body.pen_down_cmd,
+            flip_y=body.flip_y))
         media, fname = "text/plain", "nohandwrite.gcode"
     return Response(content=content, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.middleware("http")
+async def static_cache_headers(request, call_next):
+    """App assets revalidate on every load (ETag 304s keep it fast) so UI
+    changes show up immediately; the large font may cache for 30 days."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/fonts/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=2592000")
+    elif path == "/" or path.endswith((".html", ".css", ".js")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 app.mount("/", StaticFiles(directory=ROOT / "web", html=True), name="web")

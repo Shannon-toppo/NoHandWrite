@@ -19,19 +19,15 @@ function fitCanvas() {
   return { w: r.width, h: r.height };
 }
 
-/* Normalize sample strokes into the 0–1000 box (same as the server does)
- * so raw samples and the averaged result share one coordinate space. */
-function normalize(strokes) {
-  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  for (const s of strokes) for (const p of s) {
-    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-  }
-  const scale = 1000 / Math.max(maxX - minX, maxY - minY, 1e-9);
-  const offX = (1000 - (maxX - minX) * scale) / 2;
-  const offY = (1000 - (maxY - minY) * scale) / 2;
-  return strokes.map(s => s.map(p => [ (p.x - minX) * scale + offX,
-                                       (p.y - minY) * scale + offY ]));
+/* Map sample strokes from their capture field into the 0–1000 box, keeping
+ * written size/position (same field-relative rule as the server), so small
+ * kana and punctuation overlay correctly with the averaged result. */
+function normalizeField(strokes, canvas) {
+  const [cw, ch] = canvas && canvas.length === 2 ? canvas : [1000, 1000];
+  const scale = 1000 / Math.max(cw, ch, 1e-9);
+  const offX = (1000 - cw * scale) / 2;
+  const offY = (1000 - ch * scale) / 2;
+  return strokes.map(s => s.map(p => [p.x * scale + offX, p.y * scale + offY]));
 }
 
 function drawPolyline(pts, color, width, w, h) {
@@ -54,7 +50,7 @@ async function showChar(writer, char) {
 
   const raw = await (await fetch(`/api/writers/${encodeURIComponent(writer)}/chars/${encodeURIComponent(char)}`)).json();
   raw.samples.forEach((s, i) => {
-    for (const pts of normalize(s.strokes))
+    for (const pts of normalizeField(s.strokes, s.canvas))
       drawPolyline(pts, COLORS[i % COLORS.length], 1.2, w, h);
   });
 
