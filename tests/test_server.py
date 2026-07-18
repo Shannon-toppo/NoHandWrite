@@ -35,7 +35,7 @@ def test_typeset_layout(client):
     for _ in range(2):
         client.post("/api/samples", json=sample_body(char="木"))
     body = {
-        "writer": "taro", "text": "木木\n木", "smooth": True,
+        "writer": "taro", "text": "木木\n木", "smooth": True, "jitter": 0,
         "char_size_mm": 10, "char_gap_mm": 2, "line_gap_mm": 5,
         "max_width_mm": 100, "margin_mm": 5,
     }
@@ -48,6 +48,46 @@ def test_typeset_layout(client):
     assert max(ys) >= min(ys) + 15             # second line is size+gap lower
     w, h = data["page"]
     assert w > 20 and h > 25
+
+
+def test_typeset_repeated_chars_vary(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {"writer": "taro", "text": "木木", "char_gap_mm": 0}
+    data = client.post("/api/typeset", json=body).json()
+    first, second = (s["points"] for s in data["strokes"][:2])
+    # align the second occurrence back onto the first cell (15mm default step)
+    shifted = [[x - 15, y] for x, y in second]
+    assert shifted != first
+
+
+def test_typeset_negative_char_gap(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {"writer": "taro", "text": "木木", "jitter": 0, "char_gap_mm": -5}
+    r = client.post("/api/typeset", json=body)
+    assert r.status_code == 200
+    a, b = (s["points"] for s in r.json()["strokes"][:2])
+    assert b[0][0] - a[0][0] == 10           # step = 15 (size) - 5 (gap)
+
+
+def test_typeset_per_category_jitter(client):
+    for char in ("木", "A"):
+        for _ in range(2):
+            client.post("/api/samples", json=sample_body(char=char))
+    body = {"writer": "taro", "text": "木木AA", "char_gap_mm": 0,
+            "jitter": {"kanji": 1.0, "alnum": 0}}
+    data = client.post("/api/typeset", json=body).json()
+    by_char = {}
+    for s in data["strokes"]:
+        by_char.setdefault(s["char"], []).append(s["points"])
+    kanji_a, kanji_b = by_char["木"]
+    alnum_a, alnum_b = by_char["A"]
+    step = 15  # default char_size_mm, gap 0
+    assert [[x - step, y] for x, y in kanji_b] != kanji_a       # kanji varies
+    # alnum jitter 0 -> both A occurrences identical modulo layout offset
+    shifted = [[round(x - step, 3), round(y, 3)] for x, y in alnum_b]
+    assert shifted == [[round(x, 3), round(y, 3)] for x, y in alnum_a]
 
 
 def test_export_gcode_custom_pen(client):

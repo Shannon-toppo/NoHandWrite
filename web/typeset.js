@@ -6,11 +6,21 @@ const $ = (id) => document.getElementById(id);
 
 function setStatus(m) { $("status").textContent = m; }
 
+const JITTER_IDS = { hiragana: "jHiragana", katakana: "jKatakana", kanji: "jKanji",
+                     alnum: "jAlnum", other: "jOther" };
+
+function jitterParams() {
+  const j = {};
+  for (const [key, id] of Object.entries(JITTER_IDS)) j[key] = Number($(id).value);
+  return j;
+}
+
 function params() {
   return {
     writer: $("writerSel").value,
     text: $("text").value.replace(/\s+$/, ""),
     smooth: $("smoothChk").checked,
+    jitter: jitterParams(),
     char_size_mm: Number($("charSize").value) || 15,
     char_gap_mm: Number($("charGap").value) || 0,
     line_gap_mm: Number($("lineGap").value) || 0,
@@ -99,6 +109,25 @@ async function download(format) {
   } catch (err) {
     setStatus(`失敗: ${err.message}`);
   }
+}
+
+/* Paper presets: the select holds the paper width in mm; the writable line
+ * width is paper minus both margins. Height is not constrained (the page
+ * grows with the text), so the preset only drives 行の最大幅. */
+function applyPaper() {
+  const paperW = Number($("paperSel").value);
+  if (!paperW) return;
+  const margin = Number($("margin").value) || 0;
+  $("maxWidth").value = paperW - 2 * margin;
+}
+$("paperSel").addEventListener("change", applyPaper);
+$("margin").addEventListener("input", applyPaper);
+$("maxWidth").addEventListener("input", () => { $("paperSel").value = ""; });
+
+for (const id of Object.values(JITTER_IDS)) {
+  $(id).addEventListener("input", (e) => {
+    e.target.nextElementSibling.textContent = Number(e.target.value).toFixed(1);
+  });
 }
 
 $("preview").addEventListener("click", preview);

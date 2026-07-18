@@ -24,6 +24,21 @@ function drawChar(canvas, strokes, color) {
 
 function setStatus(m) { $("status").textContent = m; }
 
+const JITTER_IDS = { hiragana: "jHiragana", katakana: "jKatakana", kanji: "jKanji",
+                     alnum: "jAlnum", other: "jOther" };
+
+function jitterParams() {
+  const j = {};
+  for (const [key, id] of Object.entries(JITTER_IDS)) j[key] = Number($(id).value);
+  return j;
+}
+
+for (const id of Object.values(JITTER_IDS)) {
+  $(id).addEventListener("input", (e) => {
+    e.target.nextElementSibling.textContent = Number(e.target.value).toFixed(1);
+  });
+}
+
 const MODE_LABEL = { average: "平均文字", smooth: "平滑化", generated: "AI生成", unavailable: "不可" };
 const MODE_COLOR = { average: "#111", smooth: "#111", generated: "#111", unavailable: "#c92525" };
 
@@ -36,7 +51,8 @@ $("run").addEventListener("click", async () => {
   try {
     const res = await fetch("/api/generate", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ writer, text, smooth: $("smoothChk").checked }),
+      body: JSON.stringify({ writer, text, smooth: $("smoothChk").checked,
+                             jitter: jitterParams() }),
     });
     if (!res.ok) throw new Error((await res.text()));
     const data = await res.json();
@@ -70,6 +86,7 @@ async function download(format) {
   const res = await fetch("/api/export", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ writer, text, smooth: $("smoothChk").checked,
+                           jitter: jitterParams(),
                            format, char_size_mm: Number($("sizeMm").value) || 15 }),
   });
   if (!res.ok) { setStatus(`失敗: ${await res.text()}`); return; }

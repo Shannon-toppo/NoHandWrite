@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 
@@ -21,6 +22,7 @@ from nohandwrite.export import (
 from nohandwrite.fourier import smooth_stroke
 from nohandwrite.generate import SDTGenerator
 from nohandwrite.store import Store
+from nohandwrite.variation import char_category, jitter_strokes
 from nohandwrite.strokes import STANDARD_SIZE, Sample
 from .prompts import PROMPT_SETS
 
@@ -109,7 +111,9 @@ def get_beautified(writer: str, char: str) -> dict:
     if data is None:
         raise HTTPException(404, "no samples for this character")
     try:
-        return beautify(data).to_json()
+        # field-relative (place=False): the library overlays this on the raw
+        # samples, which are drawn field-relative in the browser
+        return beautify(data, place=False).to_json()
     except ValueError as e:
         raise HTTPException(422, str(e))
 
@@ -122,10 +126,33 @@ def generate_status() -> dict:
     return {"available": generator.available, "device": generator.device}
 
 
+class JitterIn(BaseModel):
+    """Per-script jitter strengths (0 = identical every time, 1 = standard)."""
+    hiragana: float = Field(default=1.0, ge=0, le=3)
+    katakana: float = Field(default=1.0, ge=0, le=3)
+    kanji: float = Field(default=1.0, ge=0, le=3)
+    alnum: float = Field(default=1.0, ge=0, le=3)
+    other: float = Field(default=1.0, ge=0, le=3)
+
+    def for_char(self, c: str) -> float:
+        return getattr(self, char_category(c))
+
+    @classmethod
+    def resolve(cls, jitter: "float | JitterIn") -> "JitterIn":
+        if isinstance(jitter, cls):
+            return jitter
+        return cls(**{k: jitter for k in cls.model_fields})
+
+
+#: Either one strength for every character or per-script strengths.
+JitterSpec = Annotated[float, Field(ge=0, le=3)] | JitterIn
+
+
 class GenerateIn(BaseModel):
     writer: str
     text: str = Field(min_length=1, max_length=200)
     smooth: bool = True
+    jitter: JitterSpec = 1.0
 
 
 def _render_chars(writer: str, chars: list[str], smooth: bool) -> dict[str, dict]:
@@ -184,8 +211,16 @@ def generate_text(body: GenerateIn) -> dict:
     average; unwritten ones are generated with SDT from the writer's samples."""
     chars = [c for c in dict.fromkeys(body.text) if not c.isspace()]
     entries = _render_chars(body.writer, chars, body.smooth)
-    return {"writer": body.writer, "size": STANDARD_SIZE,
-            "chars": [{"char": c, **entries[c]} for c in chars]}
+    rng = np.random.default_rng()
+    jitter = JitterIn.resolve(body.jitter)
+    out = []
+    for c in chars:
+        e = dict(entries[c])
+        if e.get("strokes"):
+            e["strokes"] = [s.round(2).tolist() for s in
+                            jitter_strokes(e["strokes"], rng, jitter.for_char(c))]
+        out.append({"char": c, **e})
+    return {"writer": body.writer, "size": STANDARD_SIZE, "chars": out}
 
 
 class TypesetIn(BaseModel):
@@ -193,8 +228,10 @@ class TypesetIn(BaseModel):
     writer: str
     text: str = Field(min_length=1, max_length=2000)
     smooth: bool = True
+    jitter: JitterSpec = 1.0
     char_size_mm: float = Field(default=15.0, gt=0, le=200)
-    char_gap_mm: float = Field(default=1.5, ge=0, le=100)
+    # negative gap lets characters overlap for tighter, more natural spacing
+    char_gap_mm: float = Field(default=1.5, ge=-10, le=100)
     line_gap_mm: float = Field(default=4.0, ge=0, le=100)
     max_width_mm: float = Field(default=180.0, gt=0, le=2000)
     margin_mm: float = Field(default=10.0, ge=0, le=100)
@@ -210,6 +247,8 @@ class TypesetIn(BaseModel):
 def _layout_entries(body: TypesetIn) -> list[dict]:
     chars = [c for c in dict.fromkeys(body.text) if not c.isspace()]
     charmap = _render_chars(body.writer, chars, body.smooth)
+    rng = np.random.default_rng()
+    jitter = JitterIn.resolve(body.jitter)
     entries = []
     for c in body.text:
         if c == "\n":
@@ -217,7 +256,11 @@ def _layout_entries(body: TypesetIn) -> list[dict]:
         elif c.isspace():
             entries.append({"char": c, "strokes": None})
         else:
-            entries.append({"char": c, "strokes": charmap[c].get("strokes"),
+            strokes = charmap[c].get("strokes")
+            if strokes:
+                # per-occurrence variation so repeated characters differ
+                strokes = jitter_strokes(strokes, rng, jitter.for_char(c))
+            entries.append({"char": c, "strokes": strokes,
                             "mode": charmap[c]["mode"]})
     return entries
 

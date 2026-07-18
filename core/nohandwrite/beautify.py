@@ -6,7 +6,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from .fourier import average_character, filter_matching_samples, smooth_stroke
-from .strokes import STANDARD_SIZE, CharacterData, normalize_to_field
+from .metrics import place_glyph
+from .strokes import (
+    STANDARD_SIZE, CharacterData, normalize_strokes, normalize_to_field,
+)
 
 
 @dataclass
@@ -28,16 +31,24 @@ class BeautifyResult:
         }
 
 
-def beautify(data: CharacterData, threshold: float | None = None) -> BeautifyResult:
+def beautify(data: CharacterData, threshold: float | None = None,
+             place: bool = True) -> BeautifyResult:
     """User-average character when several samples exist (the paper's method);
     Fourier smoothing of the single sample otherwise.
 
     Samples whose stroke count differs from the majority are excluded.
-    Normalization is field-relative, so small kana / punctuation keep the
-    size and position they were written with.
+    With `place=True` (default) each sample is bbox-normalized and the result
+    is sized/positioned by the glyph metrics table, so all characters come out
+    in consistent proportion with SDT-generated ones. With `place=False`
+    normalization is field-relative — the character keeps the size and
+    position it was written with (used by the library view, where the average
+    must overlay the raw samples).
     """
     kwargs = {} if threshold is None else {"threshold": threshold}
-    normalized = [normalize_to_field(s.strokes, s.canvas) for s in data.samples]
+    if place:
+        normalized = [normalize_strokes(s.strokes) for s in data.samples]
+    else:
+        normalized = [normalize_to_field(s.strokes, s.canvas) for s in data.samples]
     kept, stroke_count = filter_matching_samples(normalized)
     if not kept:
         raise ValueError("no samples")
@@ -47,6 +58,8 @@ def beautify(data: CharacterData, threshold: float | None = None) -> BeautifyRes
     else:
         strokes = average_character(kept, **kwargs)
         mode = "average"
+    if place:
+        strokes = place_glyph(strokes, data.char)
     return BeautifyResult(strokes=strokes, used_samples=len(kept),
                           total_samples=len(data.samples),
                           stroke_count=stroke_count, mode=mode)
