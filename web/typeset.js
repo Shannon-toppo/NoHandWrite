@@ -27,7 +27,13 @@ function params() {
     max_width_mm: Number($("maxWidth").value) || 180,
     margin_mm: Number($("margin").value) || 0,
     proportional: $("propChk").checked,
+    vertical: $("vertChk").checked,
   };
+}
+
+function num(id, fallback) {
+  const v = Number($(id).value);
+  return Number.isFinite(v) ? v : fallback;
 }
 
 function gcodeParams() {
@@ -37,10 +43,17 @@ function gcodeParams() {
     pen_up_cmd: $("penUp").value.trim() || "G0 Z5.0",
     pen_down_cmd: $("penDown").value.trim() || "G1 Z0.0 F300",
     flip_y: $("flipY").checked,
+    pressure_width: $("pressWidthChk").checked,
+    pressure_z: $("pressZChk").checked,
+    z_light: num("zLight", 0),
+    z_heavy: num("zHeavy", -0.4),
   };
 }
 
+let lastPreview = null;                       // redraw on checkbox toggle
+
 function drawPreview(data) {
+  lastPreview = data;
   const [pw, ph] = data.page;                 // mm
   const canvas = $("page");
   const container = canvas.parentElement.getBoundingClientRect();
@@ -53,14 +66,39 @@ function drawPreview(data) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);   // draw in mm units
   ctx.clearRect(0, 0, pw, ph);
+  if ($("ruleChk").checked && data.guides) {
+    ctx.strokeStyle = "#9db4d0";
+    ctx.lineWidth = 0.2;
+    for (const [a, b] of data.guides) {
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.stroke();
+    }
+  }
   ctx.strokeStyle = "#111";
-  ctx.lineWidth = 0.4;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const pressOn = $("pressWidthChk").checked;
   for (const s of data.strokes) {
+    const pts = s.points;
+    // points are [x, y] or [x, y, pressure]; with pressure data and the
+    // toggle on, draw per-segment widths matching the SVG export (0.2–1.0mm)
+    if (pressOn && pts[0].length > 2 && pts.some((q) => q[2] > 0)) {
+      for (let i = 1; i < pts.length; i++) {
+        const p = Math.min(Math.max((pts[i - 1][2] + pts[i][2]) / 2, 0), 1);
+        ctx.lineWidth = 0.2 + 0.8 * p;
+        ctx.beginPath();
+        ctx.moveTo(pts[i - 1][0], pts[i - 1][1]);
+        ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.stroke();
+      }
+      continue;
+    }
+    ctx.lineWidth = 0.4;
     ctx.beginPath();
-    ctx.moveTo(s.points[0][0], s.points[0][1]);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i][0], s.points[i][1]);
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
   }
   const nGen = Object.values(data.modes).filter((m) => m === "generated").length;
@@ -112,17 +150,20 @@ async function download(format) {
   }
 }
 
-/* Paper presets: the select holds the paper width in mm; the writable line
- * width is paper minus both margins. Height is not constrained (the page
- * grows with the text), so the preset only drives 行の最大幅. */
+/* Paper presets: the select holds "WxH" in mm; the writable line length is
+ * the paper dimension along the writing direction (width horizontally,
+ * height vertically) minus both margins. The cross direction is not
+ * constrained (the page grows with the text). */
 function applyPaper() {
-  const paperW = Number($("paperSel").value);
-  if (!paperW) return;
+  const v = $("paperSel").value;
+  if (!v) return;
+  const [w, h] = v.split("x").map(Number);
   const margin = Number($("margin").value) || 0;
-  $("maxWidth").value = paperW - 2 * margin;
+  $("maxWidth").value = ($("vertChk").checked ? h : w) - 2 * margin;
 }
 $("paperSel").addEventListener("change", applyPaper);
 $("margin").addEventListener("input", applyPaper);
+$("vertChk").addEventListener("change", applyPaper);
 $("maxWidth").addEventListener("input", () => { $("paperSel").value = ""; });
 
 for (const id of Object.values(JITTER_IDS)) {
@@ -130,6 +171,9 @@ for (const id of Object.values(JITTER_IDS)) {
     e.target.nextElementSibling.textContent = Number(e.target.value).toFixed(1);
   });
 }
+
+$("ruleChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
+$("pressWidthChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
 
 $("preview").addEventListener("click", preview);
 $("dlGcode").addEventListener("click", () => download("gcode"));

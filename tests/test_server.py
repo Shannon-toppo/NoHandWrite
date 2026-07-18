@@ -50,6 +50,39 @@ def test_typeset_layout(client):
     assert w > 20 and h > 25
 
 
+def test_typeset_line_guides(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {
+        "writer": "taro", "text": "木木\n木", "smooth": True, "jitter": 0,
+        "char_size_mm": 10, "char_gap_mm": 2, "line_gap_mm": 5,
+        "max_width_mm": 100, "margin_mm": 5,
+    }
+    data = client.post("/api/typeset", json=body).json()
+    w, _ = data["page"]
+    # two text lines -> two horizontal rules at the bottom of each 10mm cell
+    assert data["guides"] == [[[5, 15], [round(w - 5, 2), 15]],
+                              [[5, 30], [round(w - 5, 2), 30]]]
+
+    data = client.post("/api/typeset", json={**body, "vertical": True}).json()
+    _, h = data["page"]
+    # vertical: one rule at the left edge of each of the two columns
+    assert data["guides"] == [[[5, 5], [5, round(h - 5, 2)]],
+                              [[20, 5], [20, round(h - 5, 2)]]]
+
+
+def test_delete_character(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    client.post("/api/samples", json=sample_body(char="林"))
+    r = client.delete("/api/writers/taro/chars/木")
+    assert r.status_code == 200
+    assert r.json() == {"char": "木", "deleted": True}
+    assert client.get("/api/writers/taro/summary").json()["chars"] == {"林": 1}
+    assert client.delete("/api/writers/taro/chars/木").status_code == 404
+    assert client.delete("/api/writers/x!y/chars/木").status_code == 422
+
+
 def test_typeset_repeated_chars_vary(client):
     for _ in range(2):
         client.post("/api/samples", json=sample_body(char="木"))
@@ -57,8 +90,8 @@ def test_typeset_repeated_chars_vary(client):
     data = client.post("/api/typeset", json=body).json()
     first, second = (s["points"] for s in data["strokes"][:2])
     # align the second occurrence back onto the first cell (15mm default step)
-    shifted = [[x - 15, y] for x, y in second]
-    assert shifted != first
+    shifted = [[x - 15, y] for x, y, *_ in second]
+    assert shifted != [[x, y] for x, y, *_ in first]
 
 
 def test_typeset_negative_char_gap(client):
@@ -70,6 +103,17 @@ def test_typeset_negative_char_gap(client):
     assert r.status_code == 200
     a, b = (s["points"] for s in r.json()["strokes"][:2])
     assert b[0][0] - a[0][0] == 10           # step = 15 (size) - 5 (gap)
+
+
+def test_typeset_vertical(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {"writer": "taro", "text": "木木", "jitter": 0, "char_gap_mm": 0,
+            "proportional": False, "vertical": True}
+    data = client.post("/api/typeset", json=body).json()
+    a, b = (s["points"] for s in data["strokes"][:2])
+    assert abs(b[0][0] - a[0][0]) < 1e-6           # same column
+    assert b[0][1] - a[0][1] == 15                 # second char one cell below
 
 
 def test_typeset_per_category_jitter(client):
@@ -85,10 +129,11 @@ def test_typeset_per_category_jitter(client):
     kanji_a, kanji_b = by_char["木"]
     alnum_a, alnum_b = by_char["A"]
     step = 15  # default char_size_mm, gap 0
-    assert [[x - step, y] for x, y in kanji_b] != kanji_a       # kanji varies
+    assert ([[x - step, y] for x, y, *_ in kanji_b]
+            != [[x, y] for x, y, *_ in kanji_a])                # kanji varies
     # alnum jitter 0 -> both A occurrences identical modulo layout offset
-    shifted = [[round(x - step, 3), round(y, 3)] for x, y in alnum_b]
-    assert shifted == [[round(x, 3), round(y, 3)] for x, y in alnum_a]
+    shifted = [[round(x - step, 3), round(y, 3)] for x, y, *_ in alnum_b]
+    assert shifted == [[round(x, 3), round(y, 3)] for x, y, *_ in alnum_a]
 
 
 def test_export_gcode_custom_pen(client):
@@ -102,6 +147,22 @@ def test_export_gcode_custom_pen(client):
     assert r.status_code == 200
     g = r.text
     assert "M3 S90" in g and "M3 S40" in g and "F800" in g
+
+
+def test_export_pressure_options(client):
+    client.post("/api/samples", json=sample_body(char="木"))   # p 0.5 / 0.4
+    base = {"writer": "taro", "text": "木", "jitter": 0}
+    g = client.post("/api/export", json={**base, "format": "gcode",
+                                         "pressure_z": True,
+                                         "z_light": 0.0, "z_heavy": -1.0}).text
+    assert " Z-0." in g                       # modulated depth on draw moves
+    assert "G1 Z0.0 F300" not in g
+    svg = client.post("/api/export", json={**base, "format": "svg",
+                                           "pressure_width": True}).text
+    assert '<path' in svg and 'stroke-width="0.' in svg
+    # per-path width attributes only appear in pressure mode
+    plain = client.post("/api/export", json={**base, "format": "svg"}).text
+    assert plain.count("stroke-width") == 1   # just the group default
 
 
 def test_save_and_fetch(client):

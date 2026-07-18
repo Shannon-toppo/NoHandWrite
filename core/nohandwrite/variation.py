@@ -46,16 +46,17 @@ def jitter_strokes(strokes: list, rng: np.random.Generator | None = None,
                    size: float = STANDARD_SIZE) -> list[np.ndarray]:
     """Return a slightly perturbed copy of a character's strokes.
 
-    `strokes` is a list of (N, >=2) arrays or nested lists; only x/y are used.
+    `strokes` is a list of (N, >=2) arrays or nested lists; only x/y are
+    perturbed, extra columns (e.g. pressure) pass through unchanged.
     `strength` scales all amplitudes (0 disables). Each call with a fresh
     (or advanced) `rng` yields a different instance of the same letterform.
     """
-    pts_list = [np.asarray(s, dtype=float)[:, :2] for s in strokes]
-    if strength <= 0 or not pts_list:
-        return [p.copy() for p in pts_list]
+    arrs = [np.asarray(s, dtype=float) for s in strokes]
+    if strength <= 0 or not arrs:
+        return [a.copy() for a in arrs]
     rng = rng if rng is not None else np.random.default_rng()
 
-    center = np.concatenate(pts_list).mean(axis=0)
+    center = np.concatenate([a[:, :2] for a in arrs]).mean(axis=0)
     angle = np.deg2rad(rng.normal(0.0, _ROTATION_SD_DEG)) * strength
     cos_a, sin_a = np.cos(angle), np.sin(angle)
     rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
@@ -63,12 +64,14 @@ def jitter_strokes(strokes: list, rng: np.random.Generator | None = None,
     offset = rng.normal(0.0, _OFFSET_SD * size, 2) * strength
 
     out = []
-    for pts in pts_list:
-        p = ((pts - center) * scale) @ rot.T + center + offset
+    for a in arrs:
+        p = ((a[:, :2] - center) * scale) @ rot.T + center + offset
         t = np.linspace(0.0, np.pi, len(p))
         for k in range(1, _WOBBLE_HARMONICS + 1):
             amp = rng.normal(0.0, _WOBBLE_SD * size / k, 2) * strength
             phase = rng.uniform(0.0, 2.0 * np.pi)
             p = p + amp * np.cos(k * t + phase)[:, None]
-        out.append(p)
+        r = a.copy()
+        r[:, :2] = p
+        out.append(r)
     return out

@@ -105,6 +105,17 @@ def get_character(writer: str, char: str) -> dict:
     return data.to_json()
 
 
+@app.delete("/api/writers/{writer}/chars/{char}")
+def delete_character(writer: str, char: str) -> dict:
+    try:
+        deleted = store.delete_character(writer, char)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if not deleted:
+        raise HTTPException(404, "no samples for this character")
+    return {"char": char, "deleted": True}
+
+
 @app.get("/api/writers/{writer}/chars/{char}/beautify")
 def get_beautified(writer: str, char: str) -> dict:
     data = store.load_character(writer, char)
@@ -236,6 +247,7 @@ class TypesetIn(BaseModel):
     max_width_mm: float = Field(default=180.0, gt=0, le=2000)
     margin_mm: float = Field(default=10.0, ge=0, le=100)
     proportional: bool = True
+    vertical: bool = False
 
     def layout_options(self) -> LayoutOptions:
         return LayoutOptions(char_size_mm=self.char_size_mm,
@@ -243,7 +255,8 @@ class TypesetIn(BaseModel):
                              line_gap_mm=self.line_gap_mm,
                              max_width_mm=self.max_width_mm,
                              margin_mm=self.margin_mm,
-                             proportional=self.proportional)
+                             proportional=self.proportional,
+                             vertical=self.vertical)
 
 
 def _layout_entries(body: TypesetIn) -> list[dict]:
@@ -267,15 +280,34 @@ def _layout_entries(body: TypesetIn) -> list[dict]:
     return entries
 
 
+def _line_guides(w: float, h: float, opts: LayoutOptions) -> list[list[list[float]]]:
+    """Ruled guide under each text line (left edge of each column when
+    vertical), reconstructed from the page size. Preview only — never
+    part of the exported G-code/SVG."""
+    step = opts.char_size_mm + opts.line_gap_mm
+    span = (w if opts.vertical else h) - 2 * opts.margin_mm - opts.char_size_mm
+    n = max(round(span / step), 0) + 1
+    if opts.vertical:
+        return [[[round(opts.margin_mm + k * step, 2), round(opts.margin_mm, 2)],
+                 [round(opts.margin_mm + k * step, 2), round(h - opts.margin_mm, 2)]]
+                for k in range(n)]
+    base = opts.margin_mm + opts.char_size_mm
+    return [[[round(opts.margin_mm, 2), round(base + k * step, 2)],
+             [round(w - opts.margin_mm, 2), round(base + k * step, 2)]]
+            for k in range(n)]
+
+
 @app.post("/api/typeset")
 def typeset_preview(body: TypesetIn) -> dict:
     """Layout preview: placed strokes in absolute page millimeters."""
     entries = _layout_entries(body)
-    placed, (w, h) = layout_text(entries, body.layout_options())
+    opts = body.layout_options()
+    placed, (w, h) = layout_text(entries, opts)
     modes = {e["char"]: e.get("mode") for e in entries if e.get("mode")}
     return {
         "page": [round(w, 2), round(h, 2)],
         "strokes": [{"char": p.char, "points": p.points.round(3).tolist()} for p in placed],
+        "guides": _line_guides(w, h, opts),
         "modes": modes,
     }
 
@@ -287,6 +319,12 @@ class ExportIn(TypesetIn):
     pen_up_cmd: str = Field(default="G0 Z5.0", max_length=100)
     pen_down_cmd: str = Field(default="G1 Z0.0 F300", max_length=100)
     flip_y: bool = True
+    # pen pressure: SVG variable stroke width / G-code Z-axis modulation
+    # (leave pressure_z off for plotters without Z control)
+    pressure_width: bool = False
+    pressure_z: bool = False
+    z_light: float = Field(default=0.0, ge=-20, le=20)
+    z_heavy: float = Field(default=-0.4, ge=-20, le=20)
 
 
 @app.post("/api/export")
@@ -294,13 +332,15 @@ def export_text(body: ExportIn) -> Response:
     entries = _layout_entries(body)
     layout = body.layout_options()
     if body.format == "svg":
-        content = strokes_to_svg(entries, layout)
+        content = strokes_to_svg(entries, layout,
+                                 pressure_width=body.pressure_width)
         media, fname = "image/svg+xml", "nohandwrite.svg"
     else:
         content = strokes_to_gcode(entries, GCodeOptions(
             layout=layout, feed_draw=body.feed_draw, feed_travel=body.feed_travel,
             pen_up_cmd=body.pen_up_cmd, pen_down_cmd=body.pen_down_cmd,
-            flip_y=body.flip_y))
+            flip_y=body.flip_y, pressure_z=body.pressure_z,
+            z_light=body.z_light, z_heavy=body.z_heavy))
         media, fname = "text/plain", "nohandwrite.gcode"
     return Response(content=content, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})

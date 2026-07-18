@@ -53,6 +53,143 @@ def test_layout_proportional_ascii_space():
     assert abs(placed[0].points[:, 0].min() - 4.0) < 1e-9    # 0.4 of a 10mm cell
 
 
+def test_layout_vertical_columns_right_to_left():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=None, simplify_mm=0,
+                         proportional=False, vertical=True)
+    entries = [char_entry("a"), char_entry("b"), {"char": "\n"}, char_entry("c")]
+    placed, (w, h) = layout_text(entries, opts)
+    a = [p for p in placed if p.char == "a"][0]
+    b = [p for p in placed if p.char == "b"][0]
+    c = [p for p in placed if p.char == "c"][0]
+    assert b.points[:, 1].min() >= a.points[:, 1].min() + 10   # b below a
+    assert c.points[:, 0].max() <= a.points[:, 0].max() - 9    # new column left
+    assert abs(c.points[:, 1].min() - a.points[:, 1].min()) < 1e-9  # top again
+    assert w >= 20 and h >= 20
+
+
+def test_layout_vertical_wraps_at_max_length():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=25, simplify_mm=0,
+                         proportional=False, vertical=True)
+    placed, _ = layout_text([char_entry(c) for c in "abc"], opts)
+    c = [p for p in placed if p.char == "c"][0]
+    a = [p for p in placed if p.char == "a"][0]
+    assert abs(c.points[:, 1].min() - a.points[:, 1].min()) < 1e-9  # wrapped to top
+    assert c.points[:, 0].max() < a.points[:, 0].max()              # next column
+
+
+def test_layout_vertical_proportional_advance():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=None, simplify_mm=0,
+                         vertical=True)
+    short = {"char": "一", "strokes": [np.array([[0, 480], [1000, 520]], dtype=float)]}
+    tall = {"char": "l", "strokes": [np.array([[480, 0], [520, 1000]], dtype=float)]}
+    placed, _ = layout_text([short, tall], opts)
+    # short glyph's ink lands at the pen (y=0) and advances only its height
+    assert abs(placed[0].points[:, 1].min() - 0.0) < 1e-9
+    assert abs(placed[1].points[:, 1].min() - 0.4) < 1e-9
+
+
+def test_layout_vertical_glyph_adjustments():
+    opts = LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         margin_mm=0, max_width_mm=None, simplify_mm=0,
+                         proportional=False, vertical=True)
+    dash = {"char": "ー", "strokes": [np.array([[0, 480], [1000, 520]], dtype=float)]}
+    ten = {"char": "、", "strokes": [np.array([[50, 800], [200, 950]], dtype=float)]}
+    placed, _ = layout_text([dash, ten], opts)
+    d, t = placed[0].points, placed[1].points
+    # ー rotates to a vertical bar (taller than wide)
+    assert (d[:, 1].max() - d[:, 1].min()) > (d[:, 0].max() - d[:, 0].min())
+    # 、moves to the top right of its (second) cell
+    assert t[:, 0].min() > 5 and t[:, 1].max() < 10 + 5
+
+
+def box_entry(char, y_span=(0, 1000)):
+    """One-stroke glyph spanning the full box width and the given y range."""
+    y0, y1 = y_span
+    return {"char": char,
+            "strokes": [np.array([[0, y0], [1000, y1]], dtype=float)]}
+
+
+def kinsoku_opts(limit):
+    return LayoutOptions(char_size_mm=10, char_gap_mm=0, line_gap_mm=0,
+                         max_width_mm=limit, margin_mm=0, proportional=False,
+                         simplify_mm=0)
+
+
+def test_kinsoku_hanging_punctuation():
+    # 。 would wrap at 25mm but hangs past the limit; the next char breaks
+    placed, _ = layout_text([box_entry(c) for c in "ab。c"], kinsoku_opts(25))
+    maru = next(p for p in placed if p.char == "。")
+    c = next(p for p in placed if p.char == "c")
+    assert maru.points[:, 1].max() <= 10          # still on line 1
+    assert maru.points[:, 0].min() >= 20          # ...hanging at x=20-30
+    assert c.points[:, 1].min() >= 10             # line 2
+    assert c.points[:, 0].min() == 0
+
+
+def test_kinsoku_line_head_forbidden_pushed_down():
+    # ー may not start a line: it moves to line 2 together with b (追い出し)
+    placed, _ = layout_text([box_entry(c) for c in "abー"], kinsoku_opts(25))
+    b = next(p for p in placed if p.char == "b")
+    bar = next(p for p in placed if p.char == "ー")
+    assert b.points[:, 1].min() >= 10 and bar.points[:, 1].min() >= 10
+    assert b.points[:, 0].min() == 0              # b starts line 2
+    assert bar.points[:, 0].min() == 10           # ー right after it
+
+
+def test_kinsoku_line_end_forbidden_bracket():
+    # 「 fits on line 1 but may not end it: it wraps together with c
+    placed, _ = layout_text([box_entry(c) for c in "ab「c"], kinsoku_opts(30))
+    bracket = next(p for p in placed if p.char == "「")
+    c = next(p for p in placed if p.char == "c")
+    assert bracket.points[:, 1].min() >= 10 and c.points[:, 1].min() >= 10
+    assert bracket.points[:, 0].min() == 0
+    assert c.points[:, 0].min() == 10
+
+
+def test_kinsoku_vertical_hanging():
+    opts = kinsoku_opts(25)
+    opts.vertical = True
+    placed, (w, _) = layout_text([box_entry(c) for c in "ab。"], opts)
+    assert w == 10                                # 。 hangs, single column
+    maru = next(p for p in placed if p.char == "。")
+    assert maru.points[:, 1].min() >= 20
+
+
+def pressure_entry(char="力"):
+    # non-collinear so RDP keeps the middle point
+    s = np.array([[0, 0, 0.2], [500, 300, 0.2], [1000, 1000, 0.8]], dtype=float)
+    return {"char": char, "strokes": [s]}
+
+
+def test_layout_carries_pressure():
+    opts = LayoutOptions(char_size_mm=10, margin_mm=0, simplify_mm=0)
+    placed, _ = layout_text([pressure_entry()], opts)
+    assert placed[0].points.shape[1] == 3
+    np.testing.assert_allclose(placed[0].points[:, 2], [0.2, 0.2, 0.8])
+
+
+def test_svg_pressure_width():
+    plain = strokes_to_svg([pressure_entry()])
+    assert 'stroke-width="0.5"' in plain          # group default only
+    assert plain.count("<path") == 1
+    var = strokes_to_svg([pressure_entry()], pressure_width=True)
+    assert var.count("<path") == 2                # two width runs
+    assert 'stroke-width="0.36"' in var and 'stroke-width="0.6"' in var
+
+
+def test_gcode_pressure_z():
+    plain = strokes_to_gcode([pressure_entry()])
+    assert "G1 Z0.0 F300" in plain and "Z-0." not in plain
+    g = strokes_to_gcode([pressure_entry()],
+                         GCodeOptions(pressure_z=True, z_light=0.0, z_heavy=-1.0))
+    assert "G1 Z-0.20 F300" in g                  # plunge at first point's p
+    assert "Z-0.80" in g                          # deepest at p=0.8
+    assert "G1 Z0.0 F300" not in g                # fixed pen-down replaced
+
+
 def test_svg_output():
     svg = strokes_to_svg([char_entry(n_strokes=3)])
     assert svg.count("<path") == 3
