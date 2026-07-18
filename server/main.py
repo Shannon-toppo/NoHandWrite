@@ -105,6 +105,17 @@ def get_character(writer: str, char: str) -> dict:
     return data.to_json()
 
 
+@app.delete("/api/writers/{writer}/chars/{char}")
+def delete_character(writer: str, char: str) -> dict:
+    try:
+        deleted = store.delete_character(writer, char)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if not deleted:
+        raise HTTPException(404, "no samples for this character")
+    return {"char": char, "deleted": True}
+
+
 @app.get("/api/writers/{writer}/chars/{char}/beautify")
 def get_beautified(writer: str, char: str) -> dict:
     data = store.load_character(writer, char)
@@ -269,15 +280,34 @@ def _layout_entries(body: TypesetIn) -> list[dict]:
     return entries
 
 
+def _line_guides(w: float, h: float, opts: LayoutOptions) -> list[list[list[float]]]:
+    """Ruled guide under each text line (left edge of each column when
+    vertical), reconstructed from the page size. Preview only — never
+    part of the exported G-code/SVG."""
+    step = opts.char_size_mm + opts.line_gap_mm
+    span = (w if opts.vertical else h) - 2 * opts.margin_mm - opts.char_size_mm
+    n = max(round(span / step), 0) + 1
+    if opts.vertical:
+        return [[[round(opts.margin_mm + k * step, 2), round(opts.margin_mm, 2)],
+                 [round(opts.margin_mm + k * step, 2), round(h - opts.margin_mm, 2)]]
+                for k in range(n)]
+    base = opts.margin_mm + opts.char_size_mm
+    return [[[round(opts.margin_mm, 2), round(base + k * step, 2)],
+             [round(w - opts.margin_mm, 2), round(base + k * step, 2)]]
+            for k in range(n)]
+
+
 @app.post("/api/typeset")
 def typeset_preview(body: TypesetIn) -> dict:
     """Layout preview: placed strokes in absolute page millimeters."""
     entries = _layout_entries(body)
-    placed, (w, h) = layout_text(entries, body.layout_options())
+    opts = body.layout_options()
+    placed, (w, h) = layout_text(entries, opts)
     modes = {e["char"]: e.get("mode") for e in entries if e.get("mode")}
     return {
         "page": [round(w, 2), round(h, 2)],
         "strokes": [{"char": p.char, "points": p.points.round(3).tolist()} for p in placed],
+        "guides": _line_guides(w, h, opts),
         "modes": modes,
     }
 

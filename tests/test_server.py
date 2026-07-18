@@ -50,6 +50,39 @@ def test_typeset_layout(client):
     assert w > 20 and h > 25
 
 
+def test_typeset_line_guides(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    body = {
+        "writer": "taro", "text": "木木\n木", "smooth": True, "jitter": 0,
+        "char_size_mm": 10, "char_gap_mm": 2, "line_gap_mm": 5,
+        "max_width_mm": 100, "margin_mm": 5,
+    }
+    data = client.post("/api/typeset", json=body).json()
+    w, _ = data["page"]
+    # two text lines -> two horizontal rules at the bottom of each 10mm cell
+    assert data["guides"] == [[[5, 15], [round(w - 5, 2), 15]],
+                              [[5, 30], [round(w - 5, 2), 30]]]
+
+    data = client.post("/api/typeset", json={**body, "vertical": True}).json()
+    _, h = data["page"]
+    # vertical: one rule at the left edge of each of the two columns
+    assert data["guides"] == [[[5, 5], [5, round(h - 5, 2)]],
+                              [[20, 5], [20, round(h - 5, 2)]]]
+
+
+def test_delete_character(client):
+    for _ in range(2):
+        client.post("/api/samples", json=sample_body(char="木"))
+    client.post("/api/samples", json=sample_body(char="林"))
+    r = client.delete("/api/writers/taro/chars/木")
+    assert r.status_code == 200
+    assert r.json() == {"char": "木", "deleted": True}
+    assert client.get("/api/writers/taro/summary").json()["chars"] == {"林": 1}
+    assert client.delete("/api/writers/taro/chars/木").status_code == 404
+    assert client.delete("/api/writers/x!y/chars/木").status_code == 422
+
+
 def test_typeset_repeated_chars_vary(client):
     for _ in range(2):
         client.post("/api/samples", json=sample_body(char="木"))

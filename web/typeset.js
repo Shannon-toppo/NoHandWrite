@@ -41,7 +41,10 @@ function gcodeParams() {
   };
 }
 
+let lastPreview = null;                       // redraw on checkbox toggle
+
 function drawPreview(data) {
+  lastPreview = data;
   const [pw, ph] = data.page;                 // mm
   const canvas = $("page");
   const container = canvas.parentElement.getBoundingClientRect();
@@ -54,6 +57,16 @@ function drawPreview(data) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);   // draw in mm units
   ctx.clearRect(0, 0, pw, ph);
+  if ($("ruleChk").checked && data.guides) {
+    ctx.strokeStyle = "#9db4d0";
+    ctx.lineWidth = 0.2;
+    for (const [a, b] of data.guides) {
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.stroke();
+    }
+  }
   ctx.strokeStyle = "#111";
   ctx.lineWidth = 0.4;
   ctx.lineCap = "round";
@@ -134,6 +147,8 @@ for (const id of Object.values(JITTER_IDS)) {
     e.target.nextElementSibling.textContent = Number(e.target.value).toFixed(1);
   });
 }
+
+$("ruleChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
 
 $("preview").addEventListener("click", preview);
 $("dlGcode").addEventListener("click", () => download("gcode"));

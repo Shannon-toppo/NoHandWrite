@@ -60,6 +60,14 @@ class Store:
             return None
         return data
 
+    def delete_character(self, writer: str, char: str) -> bool:
+        """Remove every sample of a character. Returns False if none existed."""
+        path = self._char_path(writer, char)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def list_writers(self) -> list[str]:
         return sorted(p.name for p in self.root.iterdir()
                       if p.is_dir() and _WRITER_RE.match(p.name))

@@ -10,6 +10,10 @@ header h1 { font-size: 1.1rem; margin-bottom: 8px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 0.9rem; }
 .row input, .row select { font-size: 1rem; padding: 4px 6px; border: 1px solid #bbb; border-radius: 6px; }
 .row input { width: 9em; }
+/* checkboxes were inheriting the 9em text-input width, drifting away from
+ * their label (e.g. the Fourier-smoothing toggle on the typeset page) */
+.row input[type="checkbox"] { width: auto; }
+.row label { display: flex; align-items: center; gap: 6px; }
 .badge { background: #333; color: #fff; border-radius: 10px; padding: 2px 10px; font-size: 0.85rem; }
 
 .prompt-row { display: flex; align-items: center; gap: 16px; margin: 10px 0 6px; }

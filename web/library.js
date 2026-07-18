@@ -79,6 +79,20 @@ async function loadWriter(writer) {
   else setStatus("この書き手のデータはまだありません");
 }
 
+async function resetChar() {
+  const writer = $("writerSel").value;
+  if (!writer || !currentChar) { setStatus("文字を選択してください"); return; }
+  if (!confirm(`「${currentChar}」のサンプルをすべて削除します。よろしいですか?`)) return;
+  const res = await fetch(
+    `/api/writers/${encodeURIComponent(writer)}/chars/${encodeURIComponent(currentChar)}`,
+    { method: "DELETE" });
+  if (!res.ok) { setStatus(`削除に失敗: ${await res.text()}`); return; }
+  const deleted = currentChar;
+  currentChar = null;
+  await loadWriter(writer);
+  setStatus(`「${deleted}」を削除しました`);
+}
+
 async function init() {
   // Wait for stylesheets so the canvas has its laid-out size before drawing.
   if (document.readyState !== "complete")
@@ -99,4 +113,5 @@ async function init() {
   else setStatus("データがありません。まず入力ページで文字を書いてください。");
 }
 
+$("resetChar").addEventListener("click", resetChar);
 init();
