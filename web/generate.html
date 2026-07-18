@@ -16,6 +16,12 @@
   .cell.generated canvas { border-color: #2559c9; }
   .cell.unavailable canvas { border-color: #c92525; }
   .legend { font-size: 0.85rem; color: #555; margin-top: 8px; }
+  fieldset { border: 1px solid #ccc; border-radius: 10px; padding: 8px 12px; margin-top: 10px; }
+  legend { font-size: 0.85rem; color: #555; padding: 0 6px; }
+  .jitter { display: flex; flex-wrap: wrap; gap: 10px 18px; font-size: 0.9rem; }
+  .jitter label { display: flex; align-items: center; gap: 6px; }
+  .jitter input[type="range"] { width: 7.5em; }
+  .jitter output { font-variant-numeric: tabular-nums; min-width: 2em; color: #555; }
   .legend b.avg { color: #1a7f37; } .legend b.gen { color: #2559c9; }
   nav a { margin-right: 12px; }
 </style>
@@ -32,6 +38,16 @@
   </header>
   <p style="margin:10px 0 6px">生成したいテキストを入力(書いた文字は平均文字、未入力の文字はAI生成):</p>
   <textarea id="text" placeholder="例: 林森は木から生まれる"></textarea>
+  <fieldset>
+    <legend>ゆらぎ(0 = 毎回同じ、1 = 標準、3 = 強)</legend>
+    <div class="jitter">
+      <label>ひらがな <input id="jHiragana" type="range" value="1" min="0" max="3" step="0.1"><output for="jHiragana">1.0</output></label>
+      <label>カタカナ <input id="jKatakana" type="range" value="1" min="0" max="3" step="0.1"><output for="jKatakana">1.0</output></label>
+      <label>漢字 <input id="jKanji" type="range" value="1" min="0" max="3" step="0.1"><output for="jKanji">1.0</output></label>
+      <label>英数字 <input id="jAlnum" type="range" value="1" min="0" max="3" step="0.1"><output for="jAlnum">1.0</output></label>
+      <label>記号・その他 <input id="jOther" type="range" value="1" min="0" max="3" step="0.1"><output for="jOther">1.0</output></label>
+    </div>
+  </fieldset>
   <div class="buttons" style="margin-top:8px">
     <button id="run" class="primary">この字体で生成 ▶</button>
     <button id="dlSvg">SVG保存</button>
