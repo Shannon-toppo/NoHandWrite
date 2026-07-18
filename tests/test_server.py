@@ -29,6 +29,15 @@ def test_prompts(client):
     assert list(sets)[0] == "style_alnum"      # default set in the capture UI
     assert "、" in sets["symbols"]["chars"] and "「" in sets["symbols"]["chars"]
     assert len(sets["style"]["chars"]) == 25
+    # extra style sets: 25 kanji each, no overlap across style 1–5
+    style_keys = ["style", "style2", "style3", "style4", "style5"]
+    for k in style_keys[1:]:
+        assert len(sets[k]["chars"]) == 25
+    all_style = "".join(sets[k]["chars"] for k in style_keys)
+    assert len(set(all_style)) == len(all_style) == 125
+    # extra sets come right after the basic style set, in order
+    keys = list(sets)
+    assert keys[keys.index("style"):keys.index("style") + 5] == style_keys
 
 
 def test_typeset_layout(client):
