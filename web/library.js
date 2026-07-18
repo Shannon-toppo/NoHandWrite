@@ -7,6 +7,7 @@ const canvas = $("view");
 const ctx = canvas.getContext("2d");
 const COLORS = ["#4a7", "#47a", "#a47", "#7a4", "#a74", "#77c"];
 let currentChar = null;
+let rewriteTarget = null;  // char the "rewrite" button opens; survives a reset
 
 function setStatus(m) { $("status").textContent = m; }
 
@@ -43,6 +44,7 @@ function drawPolyline(pts, color, width, w, h) {
 
 async function showChar(writer, char) {
   currentChar = char;
+  rewriteTarget = char;
   for (const b of document.querySelectorAll(".chargrid button"))
     b.classList.toggle("active", b.dataset.char === char);
   const { w, h } = fitCanvas();
@@ -65,6 +67,7 @@ async function showChar(writer, char) {
 async function loadWriter(writer) {
   const grid = $("charGrid");
   grid.innerHTML = "";
+  rewriteTarget = null;
   if (!writer) return;
   const sum = await (await fetch(`/api/writers/${encodeURIComponent(writer)}/summary`)).json();
   const chars = Object.keys(sum.chars).sort();
@@ -90,7 +93,15 @@ async function resetChar() {
   const deleted = currentChar;
   currentChar = null;
   await loadWriter(writer);
-  setStatus(`「${deleted}」を削除しました`);
+  rewriteTarget = deleted;
+  setStatus(`「${deleted}」を削除しました。「この文字だけ書き直す」で再入力できます`);
+}
+
+function rewriteChar() {
+  const writer = $("writerSel").value;
+  if (!rewriteTarget) { setStatus("文字を選択してください"); return; }
+  location.href = `/?char=${encodeURIComponent(rewriteTarget)}` +
+                  (writer ? `&writer=${encodeURIComponent(writer)}` : "");
 }
 
 async function init() {
@@ -114,4 +125,5 @@ async function init() {
 }
 
 $("resetChar").addEventListener("click", resetChar);
+$("rewriteChar").addEventListener("click", rewriteChar);
 init();

@@ -27,7 +27,10 @@
   <div id="charGrid" class="chargrid"></div>
   <div class="canvas-wrap"><canvas id="view"></canvas></div>
   <p class="legend">細線: 各サンプル / <span class="avg">太赤線: 平均文字(フーリエ平均)</span></p>
-  <div class="buttons"><button id="resetChar">この文字をリセット(全サンプル削除)</button></div>
+  <div class="buttons">
+    <button id="resetChar">この文字をリセット(全サンプル削除)</button>
+    <button id="rewriteChar">✏️ この文字だけ書き直す</button>
+  </div>
   <p id="status" class="muted"></p>
 </main>
 <script src="library.js"></script>

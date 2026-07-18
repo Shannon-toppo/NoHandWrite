@@ -166,7 +166,31 @@ function startSet(key) {
   nextChar();
 }
 
+/* Ad-hoc set from typed characters — for rewriting a character that was
+ * reset in the library, or adding samples for specific characters only. */
+function startSingle(text) {
+  const chars = [...text].filter((c) => !/\s/.test(c));
+  if (!chars.length) { setStatus("個別入力する文字を入れてください"); return; }
+  promptSets._custom = {
+    label: "個別入力",
+    chars: chars.join(""),
+    description: "指定した文字だけを入力するモード。リセットした文字の書き直しや追加サンプルに。",
+  };
+  const sel = $("promptSet");
+  if (!sel.querySelector('option[value="_custom"]')) {
+    const opt = document.createElement("option");
+    opt.value = "_custom"; opt.textContent = "個別入力";
+    sel.appendChild(opt);
+  }
+  sel.value = "_custom";
+  startSet("_custom");
+}
+
 $("promptSet").addEventListener("change", (e) => startSet(e.target.value));
+$("startSingle").addEventListener("click", () => startSingle($("singleChars").value));
+$("singleChars").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); startSingle(e.target.value); }
+});
 for (const id of ["repeat", "repeatOrder"]) {
   $(id).addEventListener("change", () => {
     localStorage.setItem("nhw-repeat", $("repeat").value);
@@ -234,6 +258,11 @@ $("save").addEventListener("click", async () => {
 });
 
 async function init() {
+  // /?char=永&writer=taro — jump straight into single-character mode
+  // (the library's "rewrite this character" link lands here)
+  const params = new URLSearchParams(location.search);
+  const pWriter = params.get("writer");
+  if (pWriter) localStorage.setItem("nhw-writer", pWriter);
   const saved = localStorage.getItem("nhw-writer");
   if (saved) $("writer").value = saved;
   $("repeat").value = localStorage.getItem("nhw-repeat") || "1";
@@ -251,7 +280,9 @@ async function init() {
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
   await loadSummary();
-  startSet(Object.keys(promptSets)[0]);
+  const pChar = params.get("char");
+  if (pChar) { $("singleChars").value = pChar; startSingle(pChar); }
+  else startSet(Object.keys(promptSets)[0]);
 }
 
 init();
