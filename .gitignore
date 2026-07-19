@@ -8,3 +8,4 @@ models/
 third_party/SDT/data/
 third_party/SDT/model_zoo/
 .DS_Store
+/third_party/SDT
