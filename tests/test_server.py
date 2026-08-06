@@ -194,6 +194,78 @@ def test_save_and_fetch(client):
     assert r.json()["count"] == 1
 
 
+class StubGenerator:
+    """Stands in for SDT: 竹 comes out clean, 鬱 truncated, 鹵 unsupported,
+    and 龘 is supported but decodes to nothing."""
+
+    available = True
+    device = "cpu"
+
+    def supports(self, char):
+        return char != "鹵"
+
+    def generate(self, style_strokes, chars, **kw):
+        import numpy as np
+        from nohandwrite.generate import Generated
+        strokes = [np.array([[0.0, 0.0], [1000.0, 1000.0]])]
+        return {
+            "竹": Generated("竹", strokes, True, 0.9, 6, 6),
+            "鬱": Generated("鬱", strokes, False, 0.8, 24, 29),
+        }
+
+
+@pytest.fixture()
+def stub_generator(client, monkeypatch):
+    import server.main as main
+    monkeypatch.setattr(main, "generator", StubGenerator())
+    client.post("/api/samples", json=sample_body(char="木"))   # style reference
+    return client
+
+
+def test_generate_reports_each_failure_separately(stub_generator):
+    r = stub_generator.post("/api/generate",
+                            json={"writer": "taro", "text": "竹鬱鹵龘", "jitter": 0})
+    assert r.status_code == 200
+    by_char = {e["char"]: e for e in r.json()["chars"]}
+
+    assert by_char["竹"]["mode"] == "generated"
+    assert "reason" not in by_char["竹"]
+    assert by_char["竹"]["quality"] == {"completed": True, "score": 0.9,
+                                        "n_strokes": 6, "expected_strokes": 6}
+
+    # truncated: still drawable, but flagged so the UI can warn
+    assert by_char["鬱"]["mode"] == "generated_weak"
+    assert by_char["鬱"]["reason_code"] == "truncated"
+    assert by_char["鬱"]["strokes"]
+
+    # "SDT has never heard of it" vs "SDT tried and produced nothing"
+    assert by_char["鹵"]["mode"] == "unavailable"
+    assert by_char["鹵"]["reason_code"] == "unsupported"
+    assert by_char["龘"]["mode"] == "unavailable"
+    assert by_char["龘"]["reason_code"] == "decode_failed"
+    assert by_char["鹵"]["reason"] != by_char["龘"]["reason"]
+
+
+def test_generate_model_missing_reason(client, monkeypatch):
+    import server.main as main
+
+    class Missing(StubGenerator):
+        available = False
+
+    monkeypatch.setattr(main, "generator", Missing())
+    client.post("/api/samples", json=sample_body(char="木"))
+    data = client.post("/api/generate", json={"writer": "taro", "text": "竹"}).json()
+    entry = data["chars"][0]
+    assert entry["mode"] == "unavailable" and entry["reason_code"] == "model_missing"
+
+
+def test_typeset_marks_weak_generations(stub_generator):
+    data = stub_generator.post("/api/typeset",
+                               json={"writer": "taro", "text": "木竹鬱"}).json()
+    assert data["modes"] == {"木": "smooth", "竹": "generated",
+                             "鬱": "generated_weak"}
+
+
 def test_validation(client):
     bad = sample_body(char="木木")
     assert client.post("/api/samples", json=bad).status_code == 422
