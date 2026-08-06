@@ -6,6 +6,7 @@ Then open http://<this-machine>:8765/ (iPad: same LAN, Safari + Apple Pencil).
 from __future__ import annotations
 
 import datetime
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -28,6 +29,10 @@ from .prompts import PROMPT_SETS
 
 ROOT = Path(__file__).resolve().parents[1]
 store = Store(ROOT / "data")
+
+# uvicorn only configures its own loggers; this is what surfaces the
+# generation-quality lines (truncation rate, retries) in the server log
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="NoHandWrite")
 
@@ -166,9 +171,22 @@ class GenerateIn(BaseModel):
     jitter: JitterSpec = 1.0
 
 
+#: mode -> user-facing explanation for characters that produced no usable
+#: strokes, or usable-but-suspect ones. `mode` is what the UI branches on;
+#: `reason` is what it shows.
+FAIL_REASON = {
+    "model_missing": "SDTモデル/データが見つかりません(third_party/SDT)",
+    "unsupported": "生成辞書にない文字です(SDTが対応していません)",
+    "decode_failed": "生成に失敗しました(ストロークが得られませんでした)。再生成するか自分で書いてください。",
+    "truncated": "生成が途中で打ち切られました(画数の多い字)。再生成するか自分で書いてください。",
+    "few_strokes": "画数が足りない可能性があります。再生成するか自分で書いてください。",
+    "low_score": "お手本との一致度が低い字です。再生成するか自分で書いてください。",
+}
+
+
 def _render_chars(writer: str, chars: list[str], smooth: bool) -> dict[str, dict]:
     """Per-character rendering map: written chars -> Fourier average,
-    unwritten -> SDT generation. Values: {mode, strokes?|reason}."""
+    unwritten -> SDT generation. Values: {mode, strokes?, reason?, quality?}."""
     try:
         summary = store.summary(writer)
     except ValueError as e:
@@ -190,7 +208,8 @@ def _render_chars(writer: str, chars: list[str], smooth: bool) -> dict[str, dict
         if not generator.available:
             for c in to_generate:
                 entries[c] = {"mode": "unavailable",
-                              "reason": "SDTモデル/データが見つかりません(third_party/SDT)"}
+                              "reason_code": "model_missing",
+                              "reason": FAIL_REASON["model_missing"]}
         else:
             # style references: the writer's beautified characters (most-written first)
             style_chars = sorted(summary, key=summary.get, reverse=True)[:15]
@@ -203,16 +222,28 @@ def _render_chars(writer: str, chars: list[str], smooth: bool) -> dict[str, dict
                     continue
             generated = generator.generate(style_strokes, "".join(to_generate))
             for c in to_generate:
-                if c in generated:
-                    strokes = generated[c]
-                    if smooth:
-                        strokes = [smooth_stroke(np.concatenate(
-                            [s, np.zeros((len(s), 2))], axis=1)) for s in strokes]
-                    entries[c] = {"mode": "generated",
-                                  "strokes": [s.round(2).tolist() for s in strokes]}
-                else:
-                    entries[c] = {"mode": "unavailable",
-                                  "reason": "生成辞書にない文字です"}
+                g = generated.get(c)
+                if g is None:
+                    # tell "SDT has never heard of this character" apart from
+                    # "SDT tried and produced nothing usable" — the first needs
+                    # a dictionary entry, the second just needs another go
+                    code = "unsupported" if not generator.supports(c) else "decode_failed"
+                    entries[c] = {"mode": "unavailable", "reason_code": code,
+                                  "reason": FAIL_REASON[code]}
+                    continue
+                strokes = g.strokes
+                if smooth:
+                    strokes = [smooth_stroke(np.concatenate(
+                        [s, np.zeros((len(s), 2))], axis=1)) for s in strokes]
+                entry = {"mode": "generated" if g.ok else "generated_weak",
+                         "strokes": [s.round(2).tolist() for s in strokes],
+                         "quality": g.to_json()}
+                if not g.ok:
+                    code = ("truncated" if not g.completed else
+                            "few_strokes" if not g.enough_strokes else "low_score")
+                    entry["reason_code"] = code
+                    entry["reason"] = FAIL_REASON[code]
+                entries[c] = entry
     return entries
 
 

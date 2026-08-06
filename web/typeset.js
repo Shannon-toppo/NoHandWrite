@@ -101,11 +101,14 @@ function drawPreview(data) {
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
   }
-  const nGen = Object.values(data.modes).filter((m) => m === "generated").length;
-  const nAvg = Object.values(data.modes).filter((m) => m !== "generated").length;
+  const modes = Object.values(data.modes);
+  const nGen = modes.filter((m) => m.startsWith("generated")).length;
+  const nWeak = modes.filter((m) => m === "generated_weak").length;
+  const nAvg = modes.length - nGen;
   $("pageinfo").textContent =
     `ページ: ${pw} × ${ph} mm / ストローク数: ${data.strokes.length} / ` +
-    `自分の筆跡 ${nAvg} 字種・AI生成 ${nGen} 字種`;
+    `自分の筆跡 ${nAvg} 字種・AI生成 ${nGen} 字種` +
+    (nWeak ? `(うち要確認 ${nWeak} 字種 — 生成ページで確認してください)` : "");
 }
 
 async function preview() {
