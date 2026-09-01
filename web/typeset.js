@@ -36,18 +36,50 @@ function num(id, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+/* Paper size, sent only when we want the machine origin pinned to the
+ * sheet's bottom-left corner instead of the text block's. */
+function paperSize() {
+  const v = $("paperSel").value;
+  if (!v || !$("anchorPaper").checked) return {};
+  const [w, h] = v.split("x").map(Number);
+  return { paper_w_mm: w, paper_h_mm: h };
+}
+
 function gcodeParams() {
   return {
-    feed_draw: Number($("feedDraw").value) || 1500,
-    feed_travel: Number($("feedTravel").value) || 3000,
-    pen_up_cmd: $("penUp").value.trim() || "G0 Z5.0",
-    pen_down_cmd: $("penDown").value.trim() || "G1 Z0.0 F300",
+    feed_draw: num("feedDraw", 750),
+    feed_travel: num("feedTravel", 3000),
+    pen_up_cmd: $("penUp").value.trim() || "M3 S40",
+    pen_down_cmd: $("penDown").value.trim() || "M3 S90",
+    dwell_s: num("dwell", 0.25),
     flip_y: $("flipY").checked,
     pressure_width: $("pressWidthChk").checked,
     pressure_z: $("pressZChk").checked,
     z_light: num("zLight", 0),
     z_heavy: num("zHeavy", -0.4),
+    ...paperSize(),
   };
+}
+
+/* Pen lift hardware. A servo needs a dwell after each command (it is still
+ * travelling when the next move starts) and has no Z axis to modulate. */
+const PEN_PRESETS = {
+  servo: { up: "M3 S40", down: "M3 S90", dwell: 0.25,
+           hint: "サーボ式: S値は機械に合わせて調整してください。GRBL 1.1 は $32=0(レーザーモードOFF)に。0.9 系に $32 はなく、M3 S… を効かせるには VARIABLE_SPINDLE 入りのファームが要ります。筆圧のZ変調は使えません。" },
+  z: { up: "G0 Z5.0", down: "G1 Z0.0 F300", dwell: 0,
+       hint: "Z軸式: ペン上げの高さと紙面のZ=0を機械に合わせてください。" },
+};
+
+function applyPenMode() {
+  const mode = $("penMode").value;
+  const preset = PEN_PRESETS[mode];
+  $("penUp").value = preset.up;
+  $("penDown").value = preset.down;
+  $("dwell").value = preset.dwell;
+  $("penHint").textContent = preset.hint;
+  const servo = mode === "servo";
+  if (servo) $("pressZChk").checked = false;
+  for (const id of ["pressZChk", "zLight", "zHeavy"]) $(id).disabled = servo;
 }
 
 let lastPreview = null;                       // redraw on checkbox toggle
@@ -131,6 +163,11 @@ async function preview() {
   }
 }
 
+async function errText(res) {
+  const body = await res.text();
+  try { return JSON.parse(body).detail ?? body; } catch { return body; }
+}
+
 async function download(format) {
   const p = params();
   if (!p.writer || !p.text) { setStatus("書き手と文章を指定してください"); return; }
@@ -178,11 +215,105 @@ for (const id of Object.values(JITTER_IDS)) {
 $("ruleChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
 $("pressWidthChk").addEventListener("change", () => { if (lastPreview) drawPreview(lastPreview); });
 
+$("penMode").addEventListener("change", applyPenMode);
+
 $("preview").addEventListener("click", preview);
 $("dlGcode").addEventListener("click", () => download("gcode"));
 $("dlSvg").addEventListener("click", () => download("svg"));
 
+/* --- experimental: drive the plotter over USB ------------------------ */
+
+let pollTimer = null;
+
+async function refreshPorts() {
+  const sel = $("portSel");
+  const keep = sel.value;
+  sel.replaceChildren();
+  try {
+    const { ports } = await (await fetch("/api/plot/ports")).json();
+    if (!ports.length) {
+      sel.appendChild(new Option("(見つかりません)", ""));
+      return;
+    }
+    for (const p of ports) {
+      sel.appendChild(new Option(`${p.device} — ${p.description}`, p.device));
+    }
+    if (keep) sel.value = keep;
+  } catch {
+    sel.appendChild(new Option("(取得に失敗しました)", ""));
+  }
+}
+
+const PLOT_LABEL = { idle: "待機中", running: "描画中", done: "完了",
+                     stopped: "停止", error: "エラー" };
+
+function showPlot(s) {
+  const pct = s.total ? Math.round((100 * s.sent) / s.total) : 0;
+  const progress = s.total ? ` ${s.sent}/${s.total} 行 (${pct}%) ${s.elapsed_s}秒` : "";
+  const pos = s.start_report ? ` / 開始時の機械位置 ${s.start_report}` : "";
+  $("plotStatus").textContent =
+    `${PLOT_LABEL[s.state] ?? s.state}${progress} ${s.message}${pos}`.trim();
+  const running = s.state === "running";
+  $("plotSend").disabled = running;
+  $("plotStop").disabled = !running;
+  return running;
+}
+
+async function pollPlot() {
+  clearTimeout(pollTimer);
+  try {
+    const s = await (await fetch("/api/plot/status")).json();
+    if (showPlot(s)) pollTimer = setTimeout(pollPlot, 700);
+  } catch {
+    pollTimer = setTimeout(pollPlot, 1500);
+  }
+}
+
+async function plotSend() {
+  const p = params();
+  const port = $("portSel").value;
+  if (!p.writer || !p.text) { setStatus("書き手と文章を指定してください"); return; }
+  if (!port) { setStatus("送信先のポートを選んでください"); return; }
+  if (!confirm(`${port} に送信してプロッターを動かします。\n`
+               + "ペンが原点(紙の左下)にあり、周囲に障害物がないか確認してください。")) return;
+  $("plotSend").disabled = true;
+  $("plotStatus").textContent = "接続しています…";
+  try {
+    const res = await fetch("/api/plot", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...p, ...gcodeParams(), port,
+                             baud: num("baud", 115200),
+                             unlock: $("unlockChk").checked,
+                             set_origin: $("originChk").checked,
+                             travel_x_mm: num("travelX", 0),
+                             travel_y_mm: num("travelY", 0) }),
+    });
+    if (!res.ok) throw new Error(await errText(res));
+    showPlot(await res.json());
+    pollPlot();
+  } catch (err) {
+    $("plotSend").disabled = false;
+    $("plotStatus").textContent = `失敗: ${err.message}`;
+  }
+}
+
+async function plotStop() {
+  $("plotStop").disabled = true;
+  $("plotStatus").textContent = "停止しています…";
+  try {
+    const res = await fetch("/api/plot/stop", { method: "POST" });
+    showPlot(await res.json());
+  } catch (err) {
+    $("plotStatus").textContent = `停止に失敗しました: ${err.message}`;
+  }
+}
+
+$("portRefresh").addEventListener("click", refreshPorts);
+$("plotSend").addEventListener("click", plotSend);
+$("plotStop").addEventListener("click", plotStop);
+
 async function init() {
+  applyPenMode();
   const writers = (await (await fetch("/api/writers")).json()).writers;
   const sel = $("writerSel");
   for (const w of writers) {
@@ -191,6 +322,8 @@ async function init() {
     sel.appendChild(opt);
   }
   if (!writers.length) setStatus("データがありません。まず入力ページで文字を書いてください。");
+  await refreshPorts();
+  pollPlot();                     // reflect a job already running on the server
 }
 
 init();

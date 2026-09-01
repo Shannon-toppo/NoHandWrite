@@ -182,12 +182,49 @@ def test_svg_pressure_width():
 
 def test_gcode_pressure_z():
     plain = strokes_to_gcode([pressure_entry()])
-    assert "G1 Z0.0 F300" in plain and "Z-0." not in plain
+    assert "M3 S90" in plain and "Z-0." not in plain
     g = strokes_to_gcode([pressure_entry()],
-                         GCodeOptions(pressure_z=True, z_light=0.0, z_heavy=-1.0))
+                         GCodeOptions(pressure_z=True, z_light=0.0, z_heavy=-1.0,
+                                      pen_down_cmd="G1 Z0.0 F300"))
     assert "G1 Z-0.20 F300" in g                  # plunge at first point's p
     assert "Z-0.80" in g                          # deepest at p=0.8
     assert "G1 Z0.0 F300" not in g                # fixed pen-down replaced
+
+
+def test_gcode_servo_dwell():
+    """A servo is still travelling when the next move is parsed, so every
+    pen command is followed by a pause."""
+    g = strokes_to_gcode([char_entry(n_strokes=2)]).splitlines()
+    for i, line in enumerate(g):
+        if line.startswith("M3 S"):
+            assert g[i + 1] == "G4 P0.25", g[i:i + 2]
+    assert g.count("G4 P0.25") == 5               # initial up + down/up per stroke
+    assert "G4" not in strokes_to_gcode([char_entry()], GCodeOptions(dwell_s=0))
+
+
+def test_gcode_program_end():
+    g = strokes_to_gcode([char_entry()]).splitlines()
+    assert g[-4:] == ["G0 X0 Y0", "M5", "M2", "; end"]
+
+
+def test_gcode_paper_anchoring():
+    """With a paper size the machine origin is the sheet's corner, so the
+    same text lands at the same Y however many lines follow it."""
+    one = strokes_to_gcode([char_entry()],
+                           GCodeOptions(paper_w_mm=210, paper_h_mm=297))
+    two = strokes_to_gcode([char_entry(), {"char": "\n"}, char_entry()],
+                           GCodeOptions(paper_w_mm=210, paper_h_mm=297))
+    first = lambda g: next(l for l in g.splitlines() if l.startswith("G0 X"))
+    assert first(one) == first(two)
+    assert "; paper: 210.0 x 297.0 mm" in one
+    # without it, the origin is the text block: adding a line moves the text
+    assert first(strokes_to_gcode([char_entry()])) != first(
+        strokes_to_gcode([char_entry(), {"char": "\n"}, char_entry()]))
+
+
+def test_gcode_paper_overflow_warning():
+    g = strokes_to_gcode([char_entry()], GCodeOptions(paper_w_mm=10, paper_h_mm=10))
+    assert "; WARNING: text block is larger than the paper" in g
 
 
 def test_svg_output():
