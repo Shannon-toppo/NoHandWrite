@@ -74,15 +74,42 @@
   <fieldset>
     <legend>G-code(ペンプロッター)</legend>
     <div class="params">
-      <label>描画送り(mm/min) <input id="feedDraw" type="number" value="1500" min="1" max="20000" step="100"></label>
+      <label>ペン方式 <select id="penMode">
+        <option value="servo">サーボ(M3 S…)</option>
+        <option value="z">Z軸</option>
+      </select></label>
+      <label>ペン上げ <input id="penUp" type="text" value="M3 S40"></label>
+      <label>ペン下げ <input id="penDown" type="text" value="M3 S90"></label>
+      <label>ペン待ち(秒) <input id="dwell" type="number" value="0.25" min="0" max="5" step="0.05"></label>
+      <label>描画送り(mm/min) <input id="feedDraw" type="number" value="750" min="1" max="20000" step="50"></label>
       <label>移動送り(mm/min) <input id="feedTravel" type="number" value="3000" min="1" max="20000" step="100"></label>
-      <label>ペン上げ <input id="penUp" type="text" value="G0 Z5.0"></label>
-      <label>ペン下げ <input id="penDown" type="text" value="G1 Z0.0 F300"></label>
       <label><input type="checkbox" id="flipY" checked> Y軸反転(原点が手前左の機械向け)</label>
-      <label><input type="checkbox" id="pressZChk" checked> 筆圧をZ軸に反映(Z変調非対応機はオフ)</label>
+      <label><input type="checkbox" id="anchorPaper" checked> 用紙の左下を機械原点にする(用紙を選んだとき)</label>
+      <label><input type="checkbox" id="pressZChk"> 筆圧をZ軸に反映(Z軸のある機械のみ)</label>
       <label>Z 筆圧弱 <input id="zLight" type="number" value="0" min="-20" max="20" step="0.1"></label>
       <label>Z 筆圧強 <input id="zHeavy" type="number" value="-0.4" min="-20" max="20" step="0.1"></label>
     </div>
+    <p id="penHint" class="muted"></p>
+  </fieldset>
+
+  <fieldset>
+    <legend>プロッターに直接送信(実験的)</legend>
+    <div class="params">
+      <label>ポート <select id="portSel"></select></label>
+      <button id="portRefresh" type="button" style="padding:4px 10px;font-size:0.9rem">再検出</button>
+      <label>ボーレート <input id="baud" type="number" value="115200" min="1200" max="1000000" step="100"></label>
+      <label>可動範囲X <input id="travelX" type="number" value="200" min="0" max="2000" step="10"></label>
+      <label>可動範囲Y <input id="travelY" type="number" value="200" min="0" max="2000" step="10"></label>
+      <label><input type="checkbox" id="originChk" checked> 送信開始位置を原点にする(G92 X0 Y0)</label>
+      <label><input type="checkbox" id="unlockChk"> 送信前に $X でアンロック</label>
+      <span class="muted">可動範囲は0で無効。超えるジョブは送信前に止めます</span>
+    </div>
+    <div class="buttons">
+      <button id="plotSend">▶ 送信して描画</button>
+      <button id="plotStop" disabled>■ 停止</button>
+    </div>
+    <p class="muted">ペンを紙の左下(原点)に合わせてから送信してください。「送信開始位置を原点にする」がオンなら、その位置を機械に原点として教えます。オフにすると機械が既に持っている座標系のまま描くので、最初にその差分だけ移動します。停止すると機械はアラーム状態になり、原点を取り直す必要があります。</p>
+    <p id="plotStatus" class="pageinfo"></p>
   </fieldset>
 
   <div class="buttons" style="margin-top:10px">

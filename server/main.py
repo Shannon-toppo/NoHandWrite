@@ -25,6 +25,7 @@ from nohandwrite.generate import SDTGenerator
 from nohandwrite.store import Store
 from nohandwrite.variation import char_category, jitter_strokes
 from nohandwrite.strokes import STANDARD_SIZE, Sample
+from .plotter import PlotterError, list_serial_ports, plotter
 from .prompts import PROMPT_SETS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -345,17 +346,34 @@ def typeset_preview(body: TypesetIn) -> dict:
 
 class ExportIn(TypesetIn):
     format: str = Field(default="gcode", pattern="^(svg|gcode)$")
-    feed_draw: float = Field(default=1500.0, gt=0, le=20000)
+    feed_draw: float = Field(default=750.0, gt=0, le=20000)
     feed_travel: float = Field(default=3000.0, gt=0, le=20000)
-    pen_up_cmd: str = Field(default="G0 Z5.0", max_length=100)
-    pen_down_cmd: str = Field(default="G1 Z0.0 F300", max_length=100)
+    # servo pen lift by default (the usual GRBL kit); "G0 Z5.0" /
+    # "G1 Z0.0 F300" for a machine with a real Z axis
+    pen_up_cmd: str = Field(default="M3 S40", max_length=100)
+    pen_down_cmd: str = Field(default="M3 S90", max_length=100)
+    dwell_s: float = Field(default=0.25, ge=0, le=5)   # servo travel time
     flip_y: bool = True
+    # paper size anchors the output to the sheet (machine zero = its
+    # bottom-left corner); without it the origin is the text block, so the
+    # position on the paper moves as the text grows
+    paper_w_mm: float | None = Field(default=None, gt=0, le=2000)
+    paper_h_mm: float | None = Field(default=None, gt=0, le=2000)
     # pen pressure: SVG variable stroke width / G-code Z-axis modulation
     # (leave pressure_z off for plotters without Z control)
     pressure_width: bool = False
     pressure_z: bool = False
     z_light: float = Field(default=0.0, ge=-20, le=20)
     z_heavy: float = Field(default=-0.4, ge=-20, le=20)
+
+    def gcode_options(self) -> GCodeOptions:
+        return GCodeOptions(
+            layout=self.layout_options(), feed_draw=self.feed_draw,
+            feed_travel=self.feed_travel, pen_up_cmd=self.pen_up_cmd,
+            pen_down_cmd=self.pen_down_cmd, dwell_s=self.dwell_s,
+            flip_y=self.flip_y, paper_w_mm=self.paper_w_mm,
+            paper_h_mm=self.paper_h_mm, pressure_z=self.pressure_z,
+            z_light=self.z_light, z_heavy=self.z_heavy)
 
 
 @app.post("/api/export")
@@ -367,14 +385,53 @@ def export_text(body: ExportIn) -> Response:
                                  pressure_width=body.pressure_width)
         media, fname = "image/svg+xml", "nohandwrite.svg"
     else:
-        content = strokes_to_gcode(entries, GCodeOptions(
-            layout=layout, feed_draw=body.feed_draw, feed_travel=body.feed_travel,
-            pen_up_cmd=body.pen_up_cmd, pen_down_cmd=body.pen_down_cmd,
-            flip_y=body.flip_y, pressure_z=body.pressure_z,
-            z_light=body.z_light, z_heavy=body.z_heavy))
+        content = strokes_to_gcode(entries, body.gcode_options())
         media, fname = "text/plain", "nohandwrite.gcode"
     return Response(content=content, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# --- experimental: send straight to a GRBL plotter over USB ------------
+# One job at a time; the UI polls /api/plot/status and can stop it.
+
+
+class PlotIn(ExportIn):
+    port: str = Field(min_length=1, max_length=200)
+    baud: int = Field(default=115200, ge=1200, le=1000000)
+    unlock: bool = False       # send $X first when GRBL boots into alarm
+    set_origin: bool = True    # G92 X0 Y0: the parked pen is the origin
+    # machine work area; 0 disables the check. Without soft limits GRBL
+    # drives into the end stop and grinds, so refuse before moving.
+    travel_x_mm: float = Field(default=0.0, ge=0, le=2000)
+    travel_y_mm: float = Field(default=0.0, ge=0, le=2000)
+
+
+@app.get("/api/plot/ports")
+def plot_ports() -> dict:
+    return {"ports": list_serial_ports()}
+
+
+@app.post("/api/plot")
+def plot_start(body: PlotIn) -> dict:
+    if body.port not in {p["device"] for p in list_serial_ports()}:
+        raise HTTPException(400, f"ポートが見つかりません: {body.port}")
+    gcode = strokes_to_gcode(_layout_entries(body), body.gcode_options())
+    try:
+        return plotter.start(gcode, body.port, body.baud, body.unlock,
+                             body.pen_up_cmd, body.set_origin,
+                             body.travel_x_mm, body.travel_y_mm)
+    except PlotterError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.get("/api/plot/status")
+def plot_status() -> dict:
+    return plotter.status()
+
+
+@app.post("/api/plot/stop")
+def plot_stop() -> dict:
+    return plotter.stop()
 
 
 @app.middleware("http")
