@@ -41,6 +41,19 @@ class Store:
         tmp.replace(path)
         return data
 
+    def char_stamp(self, writer: str, char: str) -> str | None:
+        """Cheap fingerprint of a character's sample file (None if absent).
+
+        Changes whenever the file is written, so cache keys built from it
+        expire exactly when the samples behind them do — without reading or
+        parsing the file.
+        """
+        try:
+            st = self._char_path(writer, char).stat()
+        except (OSError, ValueError):
+            return None
+        return f"{st.st_mtime_ns:x}.{st.st_size:x}"
+
     def load_character(self, writer: str, char: str) -> CharacterData | None:
         path = self._char_path(writer, char)
         if not path.exists():

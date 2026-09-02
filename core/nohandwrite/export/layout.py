@@ -19,6 +19,7 @@ import numpy as np
 
 from ..metrics import SMALL_KANA
 from ..strokes import STANDARD_SIZE
+from ..widths import both_widths
 
 
 @dataclass
@@ -36,21 +37,22 @@ class LayoutOptions:
 
 ASCII_SPACE_ADVANCE = 0.4          # of char_size_mm, proportional mode only
 
-# Kinsoku shori (simplified JIS X 4051 sets).
-LINE_HEAD_FORBIDDEN = (set("、。,..,!?!?ー〜ゝゞヽヾ々」』)]}〉》】〕・::;;")
+# Kinsoku shori (simplified JIS X 4051 sets). `both_widths` adds the
+# full-width form of every ASCII entry (and vice versa), so ) and ）behave
+# the same without listing each one twice.
+LINE_HEAD_FORBIDDEN = (both_widths("、。,.!?ー〜ゝゞヽヾ々」』)]}〉》】〕・:;")
                        | SMALL_KANA)
-LINE_END_FORBIDDEN = set("「『([{〈《【〔((")
-HANGING = set("、。,..,")          # may hang past the line limit (ぶら下げ)
+LINE_END_FORBIDDEN = both_widths("「『([{〈《【〔")
+HANGING = both_widths("、。,.")     # may hang past the line limit (ぶら下げ)
 
 # Vertical-writing glyph adjustments (JIS vertical forms, simplified):
 # these characters are drawn rotated 90° clockwise in a column...
-VERTICAL_ROTATE = set("ー〜-−–—=…‥「」『』()()[]〈〉《》【】{}")
+VERTICAL_ROTATE = both_widths("ー〜-−–—=…‥「」『』()[]〈〉《》【】{}")
 # ...and these move to the top right of their cell: (ax, ay) anchors of the
 # leftover box space, same convention as metrics.GlyphMetrics.
 VERTICAL_REANCHOR = {
     **{c: (0.75, 0.10) for c in SMALL_KANA},
-    "、": (0.80, 0.05), "。": (0.80, 0.05),
-    ",": (0.80, 0.05), ".": (0.80, 0.05),
+    **{c: (0.80, 0.05) for c in both_widths("、。,.")},
 }
 
 

@@ -6,10 +6,12 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    from nohandwrite.rendercache import RenderCache
     from nohandwrite.store import Store
     import server.main as main
     importlib.reload(main)
-    monkeypatch.setattr(main, "store", Store(tmp_path))
+    monkeypatch.setattr(main, "store", Store(tmp_path / "data"))
+    monkeypatch.setattr(main, "render_cache", RenderCache(tmp_path / "cache"))
     return TestClient(main.app)
 
 
@@ -195,23 +197,35 @@ def test_save_and_fetch(client):
 
 
 class StubGenerator:
-    """Stands in for SDT: 竹 comes out clean, 鬱 truncated, 鹵 unsupported,
-    and 龘 is supported but decodes to nothing."""
+    """Stands in for SDT: 竹 comes out clean, 鬱 truncated, 鹵 and ： are
+    unsupported, and 龘 is supported but decodes to nothing.
+
+    `calls` records every batch it was asked for, which is how the cache
+    tests see work being skipped.
+    """
 
     available = True
     device = "cpu"
+    UNSUPPORTED = "鹵："
+
+    def __init__(self):
+        self.calls = []
 
     def supports(self, char):
-        return char != "鹵"
+        return char not in self.UNSUPPORTED
 
     def generate(self, style_strokes, chars, **kw):
         import numpy as np
         from nohandwrite.generate import Generated
+        self.calls.append(chars)
         strokes = [np.array([[0.0, 0.0], [1000.0, 1000.0]])]
-        return {
+        made = {
             "竹": Generated("竹", strokes, True, 0.9, 6, 6),
             "鬱": Generated("鬱", strokes, False, 0.8, 24, 29),
+            "(": Generated("(", strokes, True, 0.9, 2, 2),
+            ":": Generated(":", strokes, True, 0.9, 2, 2),
         }
+        return {c: g for c, g in made.items() if c in chars}
 
 
 @pytest.fixture()
@@ -220,6 +234,19 @@ def stub_generator(client, monkeypatch):
     monkeypatch.setattr(main, "generator", StubGenerator())
     client.post("/api/samples", json=sample_body(char="木"))   # style reference
     return client
+
+
+def gen(client, text, **kw):
+    """POST /api/generate with jitter off (so strokes compare equal)."""
+    r = client.post("/api/generate", json={"writer": "taro", "text": text,
+                                           "jitter": 0, **kw})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def stub(client):
+    import server.main as main
+    return main.generator
 
 
 def test_generate_reports_each_failure_separately(stub_generator):
@@ -272,3 +299,170 @@ def test_validation(client):
     bad = sample_body(writer="../x")
     assert client.post("/api/samples", json=bad).status_code == 422
     assert client.get("/api/writers/taro/chars/未").status_code == 404
+
+
+# --- rendering cache ------------------------------------------------------
+
+def test_generation_is_cached_across_requests(stub_generator):
+    """Editing a text must not re-generate the characters that did not
+    change: only the new one reaches the model."""
+    g = stub(stub_generator)
+    first = gen(stub_generator, "竹")
+    assert g.calls == ["竹"] and first["cache"] == {"hit": 0, "miss": 1}
+
+    second = gen(stub_generator, "竹鬱")
+    assert g.calls == ["竹", "鬱"]                  # 竹 came from the cache
+    assert second["cache"] == {"hit": 1, "miss": 1}
+    def strokes_of(data, char):
+        return next(e["strokes"] for e in data["chars"] if e["char"] == char)
+    assert strokes_of(second, "竹") == strokes_of(first, "竹")
+
+    assert gen(stub_generator, "竹鬱")["cache"] == {"hit": 2, "miss": 0}
+    assert g.calls == ["竹", "鬱"]
+
+
+def test_beautified_characters_are_cached_until_rewritten(stub_generator):
+    """A hand-written character is re-averaged only after its samples change."""
+    assert gen(stub_generator, "木")["cache"] == {"hit": 0, "miss": 1}
+    assert gen(stub_generator, "木")["cache"] == {"hit": 1, "miss": 0}
+    stub_generator.post("/api/samples", json=sample_body(char="木"))
+    assert gen(stub_generator, "木")["cache"] == {"hit": 0, "miss": 1}
+
+
+def test_new_style_samples_invalidate_generated_characters(stub_generator):
+    """SDT draws its style references from the writer's samples, so adding
+    samples must not leave stale generated glyphs behind."""
+    g = stub(stub_generator)
+    gen(stub_generator, "竹")
+    stub_generator.post("/api/samples", json=sample_body(char="木"))
+    assert gen(stub_generator, "竹")["cache"] == {"hit": 0, "miss": 1}
+    assert g.calls == ["竹", "竹"]
+
+
+def test_refresh_bypasses_the_cache(stub_generator):
+    """What the 再生成 button sends: draw this character again regardless."""
+    g = stub(stub_generator)
+    gen(stub_generator, "竹")
+    assert gen(stub_generator, "竹", refresh=True)["cache"] == {"hit": 0, "miss": 1}
+    assert g.calls == ["竹", "竹"]
+    assert gen(stub_generator, "竹")["cache"] == {"hit": 1, "miss": 0}   # refilled
+
+
+def test_smooth_flag_is_part_of_the_cache_key(stub_generator):
+    gen(stub_generator, "竹", smooth=True)
+    assert gen(stub_generator, "竹", smooth=False)["cache"] == {"hit": 0, "miss": 1}
+
+
+def test_cache_clear_endpoint(stub_generator):
+    gen(stub_generator, "竹")
+    assert stub_generator.post("/api/cache/clear").json()["removed"] >= 1
+    assert gen(stub_generator, "竹")["cache"] == {"hit": 0, "miss": 1}
+
+
+# --- reporting characters that could not be drawn -------------------------
+
+def test_typeset_reports_unrenderable_characters(stub_generator):
+    data = stub_generator.post("/api/typeset", json={
+        "writer": "taro", "text": "木竹鬱鹵", "width_fallback": False}).json()
+    assert data["missing"] == ["鹵"]
+    issues = {i["char"]: i for i in data["issues"]}
+    assert set(issues) == {"鬱", "鹵"}              # 木 and 竹 came out fine
+    assert issues["鹵"]["mode"] == "unavailable"
+    assert issues["鹵"]["reason_code"] == "unsupported"
+    assert issues["鬱"]["mode"] == "generated_weak"
+    assert issues["鬱"]["reason"]                   # a sentence for the user
+    assert data["issues"][0]["char"] == "鬱"        # reported in text order
+
+
+def test_export_header_names_missing_characters(stub_generator):
+    import urllib.parse
+    r = stub_generator.post("/api/export", json={
+        "writer": "taro", "text": "木鹵", "format": "gcode",
+        "width_fallback": False})
+    assert r.status_code == 200
+    assert urllib.parse.unquote(r.headers["X-Missing-Chars"]) == "鹵"
+    clean = stub_generator.post("/api/export", json={
+        "writer": "taro", "text": "木", "format": "gcode"})
+    assert clean.headers["X-Missing-Chars"] == ""
+
+
+# --- full-width / half-width substitution ---------------------------------
+
+def test_substitutes_the_width_the_writer_actually_wrote(stub_generator):
+    """（ is on file, ( is not — draw the writer's own hand rather than let
+    SDT invent a half-width one."""
+    stub_generator.post("/api/samples", json=sample_body(char="（"))
+    entry = gen(stub_generator, "(")["chars"][0]
+    assert entry["char"] == "("                     # what the user typed
+    assert entry["substitute"] == "（"               # what gets drawn
+    assert entry["mode"] in ("smooth", "average")
+
+
+def test_substitutes_a_generatable_width_when_neither_is_written(stub_generator):
+    """： is outside the generation dictionary but : is inside it."""
+    entry = gen(stub_generator, "：")["chars"][0]
+    assert entry["substitute"] == ":" and entry["mode"] == "generated"
+
+
+def test_no_substitution_when_the_character_itself_is_fine(stub_generator):
+    stub_generator.post("/api/samples", json=sample_body(char="（"))
+    assert "substitute" not in gen(stub_generator, "（")["chars"][0]
+    assert "substitute" not in gen(stub_generator, "木")["chars"][0]
+
+
+def test_width_fallback_can_be_switched_off(stub_generator):
+    stub_generator.post("/api/samples", json=sample_body(char="（"))
+    entry = gen(stub_generator, "(", width_fallback=False)["chars"][0]
+    assert "substitute" not in entry and entry["mode"] == "generated"
+
+
+def test_typeset_lays_out_the_substituted_glyph(stub_generator):
+    stub_generator.post("/api/samples", json=sample_body(char="（"))
+    data = stub_generator.post("/api/typeset", json={
+        "writer": "taro", "text": "(", "jitter": 0}).json()
+    assert data["substitutions"] == [{"char": "(", "substitute": "（"}]
+    assert data["strokes"][0]["char"] == "（"       # placed as the full-width form
+    assert not data["missing"]
+
+
+# --- progress reporting ---------------------------------------------------
+
+def test_progress_is_visible_while_a_render_runs(client, monkeypatch):
+    """The UI polls this endpoint during the blocking POST, so the numbers
+    have to be readable from another request while generation is happening."""
+    import threading
+    import server.main as main
+
+    seen = []
+    released = threading.Event()
+
+    class SlowGenerator(StubGenerator):
+        def generate(self, style_strokes, chars, on_progress=None, **kw):
+            on_progress("generate", 1, len(chars))
+            seen.append(client.get("/api/render/progress/job1").json())
+            released.set()
+            return super().generate(style_strokes, chars, **kw)
+
+    monkeypatch.setattr(main, "generator", SlowGenerator())
+    client.post("/api/samples", json=sample_body(char="木"))
+    data = gen(client, "竹鬱", job="job1")
+
+    assert released.is_set()
+    mid = seen[0]
+    assert mid["stage"] == "generate" and mid["total"] == 2 and mid["done"] == 1
+    assert not mid["finished"]
+    assert data["chars"]                            # and the render still ran
+
+    after = client.get("/api/render/progress/job1").json()
+    assert after["finished"] and after["stage"] == "done"
+
+
+def test_progress_of_an_unknown_job_is_empty_not_an_error(client):
+    """The browser starts polling before its POST has reached the server."""
+    r = client.get("/api/render/progress/never-started")
+    assert r.status_code == 200 and r.json()["stage"] is None
+
+
+def test_a_render_without_a_job_id_reports_nothing(stub_generator):
+    gen(stub_generator, "竹")                       # no job= -> null reporter
+    assert stub_generator.get("/api/render/progress/job1").json()["stage"] is None

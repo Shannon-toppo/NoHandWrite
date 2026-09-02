@@ -107,8 +107,10 @@ class FakeGenerator(SDTGenerator):
         self.style_draws += 1
         return np.zeros((1, 64, 64), dtype=np.float32)
 
-    def _run(self, style, chars, batch_size):
+    def _run(self, style, chars, batch_size, on_progress=None, stage="generate"):
         self.calls.append("".join(chars))
+        if on_progress:
+            on_progress(stage, len(chars), len(chars))
         return self.attempts_out[len(self.calls) - 1]
 
 
@@ -145,3 +147,18 @@ def test_style_batch_draw_varies():
     a = g.build_style_batch(strokes, rng)
     b = g.build_style_batch(strokes, rng)
     assert a.shape == b.shape and not np.array_equal(a, b)
+
+
+def test_generate_reports_progress_through_the_attempts():
+    """A long text blocks the request for a minute, so the caller has to be
+    able to say where it has got to — including the one-off model load."""
+    g = FakeGenerator([
+        {"A": make("A", score=0.9), "B": make("B", completed=False)},
+        {"B": make("B", score=0.8)},
+    ])
+    seen = []
+    g.generate([[np.zeros((2, 2))]], "AB", attempts=3,
+               on_progress=lambda *a: seen.append(a))
+    assert seen[0] == ("model", 0, 0)            # before anything is decoded
+    assert ("generate", 2, 2) in seen            # first pass over both
+    assert ("retry", 1, 1) in seen               # only B came back for more

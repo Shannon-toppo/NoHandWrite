@@ -21,6 +21,11 @@
                   border: 1px solid #ccc; border-radius: 8px; padding: 16px; }
   #page { background: #fff; box-shadow: 0 1px 6px #0003; display: block; margin: 0 auto; }
   .pageinfo { font-size: 0.85rem; color: #555; margin-top: 6px; }
+  .issues { margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+            border: 1px solid #e0b088; background: #fff6ea; color: #7a4a05;
+            font-size: 0.9rem; line-height: 1.5; }
+  .issues b { font-size: 1.15rem; }
+  .issues a { color: #7a4a05; }
   nav a { margin-right: 12px; }
 </style>
 </head>
@@ -53,6 +58,7 @@
       <label>行間 <input id="lineGap" type="number" value="4" min="0" max="100" step="0.5"></label>
       <label>行の最大長 <input id="maxWidth" type="number" value="180" min="10" max="2000" step="5"></label>
       <label>余白 <input id="margin" type="number" value="10" min="0" max="100" step="1"></label>
+      <label><input type="checkbox" id="widthChk" checked> 全角/半角を代用(（）と()、；：と;: など、対応している方の字形で書く)</label>
       <label><input type="checkbox" id="propChk" checked> 可変幅(字幅で送る。オフで等幅)</label>
       <label><input type="checkbox" id="vertChk"> 縦書き(右から左へ改行)</label>
       <label><input type="checkbox" id="ruleChk"> 各行に下線を表示(プレビューのみ、印字されません)</label>
@@ -114,14 +120,18 @@
 
   <div class="buttons" style="margin-top:10px">
     <button id="preview" class="primary">プレビュー ▶</button>
+    <button id="rebuild" title="キャッシュを無視して全部引き直します">↻ 全部作り直す</button>
     <button id="dlGcode">G-code保存</button>
     <button id="dlSvg">SVG保存</button>
   </div>
 
+  <p id="issues" class="issues" hidden></p>
   <div class="preview-wrap"><canvas id="page" width="10" height="10"></canvas></div>
   <p id="pageinfo" class="pageinfo"></p>
   <p id="status" class="muted"></p>
 </main>
+<script src="remember.js"></script>
+<script src="progress.js"></script>
 <script src="typeset.js"></script>
 </body>
 </html>

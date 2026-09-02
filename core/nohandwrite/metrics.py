@@ -61,6 +61,15 @@ CHAR_METRICS: dict[str, GlyphMetrics] = {
     '"': GlyphMetrics(0.18, ax=0.40, ay=0.05),
     "!": GlyphMetrics(0.72, ay=0.57),
     "?": GlyphMetrics(0.72, ay=0.57),
+    # full-width punctuation sits in a full em box but keeps the ink small
+    # and low, like 、。 — without these it would fall back to the 0.70
+    # "other" default and a substituted ．would come out as a huge dot
+    "，": GlyphMetrics(0.16, ax=0.10, ay=0.85),
+    "．": GlyphMetrics(0.13, ax=0.10, ay=0.85),
+    "：": GlyphMetrics(0.55, ax=0.25, ay=0.60),
+    "；": GlyphMetrics(0.60, ax=0.25, ay=0.65),
+    "！": GlyphMetrics(0.75, ax=0.35, ay=0.57),
+    "？": GlyphMetrics(0.75, ax=0.35, ay=0.57),
 }
 
 
