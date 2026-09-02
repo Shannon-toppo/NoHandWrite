@@ -21,6 +21,7 @@ function params() {
     text: $("text").value.replace(/\s+$/, ""),
     smooth: $("smoothChk").checked,
     jitter: jitterParams(),
+    width_fallback: $("widthChk").checked,
     char_size_mm: Number($("charSize").value) || 15,
     char_gap_mm: Number($("charGap").value) || 0,
     line_gap_mm: Number($("lineGap").value) || 0,
@@ -82,6 +83,17 @@ function applyPenMode() {
   for (const id of ["pressZChk", "zLight", "zHeavy"]) $(id).disabled = servo;
 }
 
+async function errText(res) {
+  const body = await res.text();
+  try { return JSON.parse(body).detail ?? body; } catch { return body; }
+}
+
+/** Characters the export came out missing, as named by the response header
+ *  (percent-encoded there because header values are latin-1). */
+function missingChars(res) {
+  return decodeURIComponent(res.headers.get("X-Missing-Chars") || "");
+}
+
 let lastPreview = null;                       // redraw on checkbox toggle
 
 function drawPreview(data) {
@@ -134,59 +146,117 @@ function drawPreview(data) {
     ctx.stroke();
   }
   const modes = Object.values(data.modes);
-  const nGen = modes.filter((m) => m.startsWith("generated")).length;
-  const nWeak = modes.filter((m) => m === "generated_weak").length;
-  const nAvg = modes.length - nGen;
+  const count = (p) => modes.filter(p).length;
+  const nGen = count((m) => m.startsWith("generated"));
+  const nWeak = count((m) => m === "generated_weak");
+  const nBad = count((m) => m === "unavailable");
   $("pageinfo").textContent =
     `ページ: ${pw} × ${ph} mm / ストローク数: ${data.strokes.length} / ` +
-    `自分の筆跡 ${nAvg} 字種・AI生成 ${nGen} 字種` +
-    (nWeak ? `(うち要確認 ${nWeak} 字種 — 生成ページで確認してください)` : "");
+    `自分の筆跡 ${modes.length - nGen - nBad} 字種・AI生成 ${nGen} 字種` +
+    (nWeak ? `(うち要確認 ${nWeak} 字種 — 生成ページで確認してください)` : "") +
+    (nBad ? `・書けない字 ${nBad} 字種` : "") +
+    (data.cache ? ` / 新規描画 ${data.cache.miss} 字種・キャッシュ ${data.cache.hit} 字種` : "");
+  showIssues(data);
 }
 
-async function preview() {
+/** Banner above the preview: which characters will come out blank, which
+ *  were generated badly, and which were swapped for their other width.
+ *  A missing character is otherwise invisible — the page just has a gap. */
+function showIssues(data) {
+  const box = $("issues");
+  const issues = data.issues || [];
+  const failed = issues.filter((e) => e.mode === "unavailable");
+  const weak = issues.filter((e) => e.mode === "generated_weak");
+  const subs = data.substitutions || [];
+  if (!failed.length && !weak.length && !subs.length) { box.hidden = true; return; }
+  box.replaceChildren();
+  if (failed.length) {
+    const why = [...new Set(failed.map((e) => e.reason))].join(" / ");
+    box.append(bold(failed.map((e) => e.char).join("")),
+               `は書けないので空白になります。${why}`, br(), link());
+  }
+  if (weak.length)
+    box.append(bold(weak.map((e) => e.char).join("")),
+               "は生成できましたが要確認です(打ち切り・画数不足など)。", br());
+  if (subs.length)
+    box.append("全角/半角を代用: "
+               + subs.map((e) => `${e.char}→${e.substitute}`).join("、"));
+  box.hidden = false;
+}
+
+function bold(text) {
+  const b = document.createElement("b");
+  b.textContent = text;
+  return b;
+}
+
+function br() { return document.createElement("br"); }
+
+/** Where to go and fix it: the generate page shows each character on its own,
+ *  with a 再生成 button and a link to write it by hand. */
+function link() {
+  const a = document.createElement("a");
+  a.href = "/generate.html";
+  a.textContent = "→ 生成ページで確認・再生成する";
+  return a;
+}
+
+/* `refresh` ignores the server-side render cache and draws every character
+ * again; without it only the characters that changed are re-rendered. */
+async function preview(refresh = false) {
   const p = params();
   if (!p.writer || !p.text) { setStatus("書き手と文章を指定してください"); return; }
-  setStatus("レイアウト中…(未入力文字があると初回はモデル読み込みで数十秒かかります)");
-  $("preview").disabled = true;
+  setStatus("レイアウト中…");
+  $("preview").disabled = $("rebuild").disabled = true;
+  const job = newJobId();
+  const stop = watchRenderProgress(job, setStatus);
   try {
     const res = await fetch("/api/typeset", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(p),
+      body: JSON.stringify({ ...p, refresh, job }),
     });
-    if (!res.ok) throw new Error(await res.text());
-    drawPreview(await res.json());
-    setStatus("プレビュー更新");
+    if (!res.ok) throw new Error(await errText(res));
+    const data = await res.json();
+    stop();
+    drawPreview(data);
+    setStatus(data.missing.length
+      ? `プレビュー更新 — 書けない文字: ${data.missing.join("")}`
+      : "プレビュー更新");
   } catch (err) {
     setStatus(`失敗: ${err.message}`);
   } finally {
-    $("preview").disabled = false;
+    stop();
+    $("preview").disabled = $("rebuild").disabled = false;
   }
-}
-
-async function errText(res) {
-  const body = await res.text();
-  try { return JSON.parse(body).detail ?? body; } catch { return body; }
 }
 
 async function download(format) {
   const p = params();
   if (!p.writer || !p.text) { setStatus("書き手と文章を指定してください"); return; }
   setStatus(`${format} を作成中…`);
+  const job = newJobId();
+  const stop = watchRenderProgress(job, setStatus);
   try {
     const res = await fetch("/api/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...p, ...gcodeParams(), format }),
+      body: JSON.stringify({ ...p, ...gcodeParams(), format, job }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errText(res));
+    stop();
+    const missing = missingChars(res);
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = format === "svg" ? "nohandwrite.svg" : "nohandwrite.gcode";
     a.click();
     URL.revokeObjectURL(a.href);
-    setStatus("ダウンロードしました");
+    setStatus(missing
+      ? `ダウンロードしました — ただし ${missing} は書けないので空白になっています`
+      : "ダウンロードしました");
   } catch (err) {
     setStatus(`失敗: ${err.message}`);
+  } finally {
+    stop();
   }
 }
 
@@ -217,7 +287,8 @@ $("pressWidthChk").addEventListener("change", () => { if (lastPreview) drawPrevi
 
 $("penMode").addEventListener("change", applyPenMode);
 
-$("preview").addEventListener("click", preview);
+$("preview").addEventListener("click", () => preview(false));
+$("rebuild").addEventListener("click", () => preview(true));
 $("dlGcode").addEventListener("click", () => download("gcode"));
 $("dlSvg").addEventListener("click", () => download("svg"));
 
@@ -278,10 +349,12 @@ async function plotSend() {
                + "ペンが原点(紙の左下)にあり、周囲に障害物がないか確認してください。")) return;
   $("plotSend").disabled = true;
   $("plotStatus").textContent = "接続しています…";
+  const job = newJobId();
+  const stop = watchRenderProgress(job, (m) => { $("plotStatus").textContent = m; });
   try {
     const res = await fetch("/api/plot", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...p, ...gcodeParams(), port,
+      body: JSON.stringify({ ...p, ...gcodeParams(), port, job,
                              baud: num("baud", 115200),
                              unlock: $("unlockChk").checked,
                              set_origin: $("originChk").checked,
@@ -289,11 +362,17 @@ async function plotSend() {
                              travel_y_mm: num("travelY", 0) }),
     });
     if (!res.ok) throw new Error(await errText(res));
-    showPlot(await res.json());
+    stop();
+    const started = await res.json();
+    showPlot(started);
+    if (started.missing?.length)
+      setStatus(`送信しました — ${started.missing.join("")} は書けないので空白になります`);
     pollPlot();
   } catch (err) {
     $("plotSend").disabled = false;
     $("plotStatus").textContent = `失敗: ${err.message}`;
+  } finally {
+    stop();
   }
 }
 
@@ -308,6 +387,8 @@ async function plotStop() {
   }
 }
 
+rememberTextarea($("text"), "nhw-text-typeset");
+
 $("portRefresh").addEventListener("click", refreshPorts);
 $("plotSend").addEventListener("click", plotSend);
 $("plotStop").addEventListener("click", plotStop);
@@ -321,6 +402,7 @@ async function init() {
     opt.value = w; opt.textContent = w;
     sel.appendChild(opt);
   }
+  rememberWriter(sel);
   if (!writers.length) setStatus("データがありません。まず入力ページで文字を書いてください。");
   await refreshPorts();
   pollPlot();                     // reflect a job already running on the server

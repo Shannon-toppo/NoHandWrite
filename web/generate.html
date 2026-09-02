@@ -27,6 +27,11 @@
                 white-space: nowrap; }
   .cell .actions button:disabled { opacity: 0.5; cursor: default; }
   .legend { font-size: 0.85rem; color: #555; margin-top: 8px; }
+  .issues { margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+            border: 1px solid #e0b088; background: #fff6ea; color: #7a4a05;
+            font-size: 0.9rem; line-height: 1.5; }
+  .issues b { font-size: 1.15rem; }
+  .cell .sub { display: block; color: #2559c9; font-size: 0.68rem; }
   fieldset { border: 1px solid #ccc; border-radius: 10px; padding: 8px 12px; margin-top: 10px; }
   legend { font-size: 0.85rem; color: #555; padding: 0 6px; }
   .jitter { display: flex; flex-wrap: wrap; gap: 10px 18px; font-size: 0.9rem; }
@@ -46,6 +51,7 @@
     <div class="row" style="margin-top:8px">
       <label>書き手 <select id="writerSel"></select></label>
       <label><input type="checkbox" id="smoothChk" checked> フーリエ平滑化</label>
+      <label><input type="checkbox" id="widthChk" checked> 全角/半角を代用(（）と()、；：と;: など、対応している方の字形で書く)</label>
     </div>
   </header>
   <p style="margin:10px 0 6px">生成したいテキストを入力(書いた文字は平均文字、未入力の文字はAI生成):</p>
@@ -62,15 +68,19 @@
   </fieldset>
   <div class="buttons" style="margin-top:8px">
     <button id="run" class="primary">この字体で生成 ▶</button>
+    <button id="rerun" title="キャッシュを無視して全部引き直します">↻ 全部作り直す</button>
     <button id="dlSvg">SVG保存</button>
     <button id="dlGcode">G-code保存</button>
     <label style="align-self:center;font-size:0.85rem">文字サイズ(mm) <input id="sizeMm" type="number" value="15" min="3" max="100" style="width:4em"></label>
   </div>
   <p class="legend"><b class="avg">緑枠: 自分の筆跡(平均/平滑化)</b> / <b class="gen">青枠: AI生成</b> / <b class="weak">橙枠: AI生成(要確認)</b> / 赤枠: 生成不可<br>
   AI生成の字は「↻ 再生成」で引き直せます(毎回サンプリングし直すので結果が変わります)。うまくいかない字は「✏️ 自分で書く」から手書きしてください。</p>
+  <p id="issues" class="issues" hidden></p>
   <div id="out" class="out"></div>
   <p id="status" class="muted"></p>
 </main>
+<script src="remember.js"></script>
+<script src="progress.js"></script>
 <script src="generate.js"></script>
 </body>
 </html>

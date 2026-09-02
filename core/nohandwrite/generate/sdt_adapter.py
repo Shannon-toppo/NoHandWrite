@@ -26,6 +26,7 @@ import pickle
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -59,6 +60,10 @@ SCORE_OK = 0.65
 #: A candidate with fewer than this fraction of the expected strokes is
 #: retried even if it finished cleanly.
 MIN_STROKE_RATIO = 0.6
+
+#: `on_progress(stage, done, total)`, called as generation proceeds. `stage`
+#: is "model" (loading the checkpoint), "generate" or "retry".
+ProgressFn = Callable[[str, int, int], None]
 
 
 @dataclass(frozen=True)
@@ -297,8 +302,9 @@ class SDTGenerator:
         imgs = [render_style_image(normalize_strokes(style_strokes[i])) for i in idx]
         return np.stack(imgs).astype(np.float32) / 255.0
 
-    def _run(self, style: np.ndarray, chars: list[str],
-             batch_size: int) -> dict[str, Generated]:
+    def _run(self, style: np.ndarray, chars: list[str], batch_size: int,
+             on_progress: ProgressFn | None = None,
+             stage: str = "generate") -> dict[str, Generated]:
         """One generation pass over `chars` (this is what `generate` retries)."""
         import torch
         model = self._load_model()
@@ -314,6 +320,8 @@ class SDTGenerator:
                 preds = model.inference(img_list, char_t, MAX_SEQ_LEN)
                 sos = torch.tensor(bs * [[0, 0, 1, 0, 0]]).unsqueeze(1).to(preds)
                 preds = torch.cat((sos, preds), 1).cpu().numpy()
+                if on_progress:
+                    on_progress(stage, i + bs, len(chars))
                 for c, seq in zip(batch, preds):
                     strokes, completed = decode_sequence(seq)
                     if not strokes:
@@ -337,7 +345,8 @@ class SDTGenerator:
 
     def generate(self, style_strokes: list[list[np.ndarray]], chars: str,
                  batch_size: int = 8, attempts: int = DEFAULT_ATTEMPTS,
-                 rng: np.random.Generator | None = None) -> dict[str, Generated]:
+                 rng: np.random.Generator | None = None,
+                 on_progress: ProgressFn | None = None) -> dict[str, Generated]:
         """Generate `chars` in the style of `style_strokes` (each entry is one
         character's strokes, any coordinate space with x,y in first columns).
 
@@ -349,9 +358,16 @@ class SDTGenerator:
         Returns {char: Generated} with strokes normalized to the 0–1000 box.
         Characters missing from the content dictionary, and ones that decoded
         to no strokes at all, are absent from the result.
+
+        `on_progress(stage, done, total)` is called as batches finish, so a
+        caller waiting on a long text can say where it has got to. The
+        checkpoint load is reported separately because it happens once and
+        takes longer than anything that follows it.
         """
         rng = rng or np.random.default_rng()
         todo = [c for c in dict.fromkeys(chars) if self.supports(c)]
+        if on_progress and self._model is None:
+            on_progress("model", 0, 0)
         best: dict[str, Generated] = {}
         for attempt in range(max(1, attempts)):
             pending = [c for c in todo if c not in best or not best[c].ok]
@@ -361,7 +377,9 @@ class SDTGenerator:
                 log.info("SDT retry %d: %d character(s) — %s",
                          attempt, len(pending), "".join(pending))
             style = self.build_style_batch(style_strokes, rng)   # (15, 64, 64)
-            for c, g in self._run(style, pending, batch_size).items():
+            stage = "generate" if not attempt else "retry"
+            for c, g in self._run(style, pending, batch_size,
+                                  on_progress, stage).items():
                 if c not in best or g.rank > best[c].rank:
                     best[c] = g
 

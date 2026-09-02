@@ -24,6 +24,12 @@ function drawChar(canvas, strokes, color) {
 
 function setStatus(m) { $("status").textContent = m; }
 
+/** Characters the export came out missing, as named by the response header
+ *  (percent-encoded there because header values are latin-1). */
+function missingChars(res) {
+  return decodeURIComponent(res.headers.get("X-Missing-Chars") || "");
+}
+
 const JITTER_IDS = { hiragana: "jHiragana", katakana: "jKatakana", kanji: "jKanji",
                      alnum: "jAlnum", other: "jOther" };
 
@@ -71,6 +77,12 @@ function makeCell(e, regen) {
   const label = document.createElement("span");
   label.textContent = `${e.char} · ${MODE_LABEL[e.mode] ?? e.mode}`;
   cell.appendChild(label);
+  if (e.substitute) {
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = `${e.char} → ${e.substitute} で代用`;
+    cell.appendChild(sub);
+  }
   if (e.strokes) drawChar(cv, e.strokes, MODE_COLOR[e.mode]);
   cell.title = qualityTitle(e);
   if (e.reason) {
@@ -97,21 +109,31 @@ function makeCell(e, regen) {
   return cell;
 }
 
-async function requestChars(text) {
-  const res = await fetch("/api/generate", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ writer: $("writerSel").value, text,
-                           smooth: $("smoothChk").checked, jitter: jitterParams() }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return (await res.json()).chars;
+/* `refresh` skips the server-side cache: SDT resamples its style references
+ * every time, so it really is a fresh attempt at the character.
+ * The job id is what the progress poll below follows. */
+async function requestChars(text, refresh = false) {
+  const job = newJobId();
+  const stop = watchRenderProgress(job, setStatus);
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ writer: $("writerSel").value, text,
+                             smooth: $("smoothChk").checked, jitter: jitterParams(),
+                             width_fallback: $("widthChk").checked, refresh, job }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  } finally {
+    stop();
+  }
 }
 
 async function regenerate(char, cell, button) {
   button.disabled = true;
   setStatus(`「${char}」を再生成中…`);
   try {
-    const [e] = await requestChars(char);
+    const [e] = (await requestChars(char, true)).chars;
     cell.replaceWith(makeCell(e, regenerate));
     setStatus(`「${char}」を再生成しました`);
   } catch (err) {
@@ -120,51 +142,101 @@ async function regenerate(char, cell, button) {
   }
 }
 
-$("run").addEventListener("click", async () => {
+/** Banner above the tiles: which characters did not come out, and why.
+ *  The tiles say the same per character, but a long text scrolls them out
+ *  of sight — this is what stops a silent gap reaching the paper. */
+function showIssues(chars) {
+  const box = $("issues");
+  const failed = chars.filter((e) => e.mode === "unavailable");
+  const weak = chars.filter((e) => e.mode === "generated_weak");
+  const subs = chars.filter((e) => e.substitute);
+  if (!failed.length && !weak.length && !subs.length) { box.hidden = true; return; }
+  box.replaceChildren();
+  if (failed.length) {
+    const why = [...new Set(failed.map((e) => e.reason))].join(" / ");
+    box.append(chars_(failed), `は生成できませんでした(空白のまま出力されます)。${why}`,
+               document.createElement("br"));
+  }
+  if (weak.length)
+    box.append(chars_(weak), "は生成できましたが要確認です"
+               + "(打ち切り・画数不足・一致度が低いなど)。橙枠の字を確認してください。",
+               document.createElement("br"));
+  if (subs.length)
+    box.append(`全角/半角を代用: `
+               + subs.map((e) => `${e.char}→${e.substitute}`).join("、"));
+  box.hidden = false;
+}
+
+/** The characters of `entries`, emphasized. */
+function chars_(entries) {
+  const b = document.createElement("b");
+  b.textContent = entries.map((e) => e.char).join("");
+  return b;
+}
+
+async function run(refresh) {
   const writer = $("writerSel").value;
   const text = $("text").value.trim();
   if (!writer || !text) { setStatus("書き手とテキストを指定してください"); return; }
-  setStatus("生成中…(初回はモデル読み込みに数十秒かかることがあります)");
-  $("run").disabled = true;
+  setStatus("生成中…");
+  $("run").disabled = $("rerun").disabled = true;
   try {
-    const chars = await requestChars(text);
+    const { chars, cache } = await requestChars(text, refresh);
     const out = $("out");
     out.innerHTML = "";
     for (const e of chars) out.appendChild(makeCell(e, regenerate));
-    const weak = chars.filter((e) => e.mode !== "generated" && e.reason);
-    setStatus(weak.length
-      ? `完了(要確認 ${weak.length} 字: ${weak.map((e) => e.char).join("")})`
-      : "完了");
+    showIssues(chars);
+    const bad = chars.filter((e) => e.reason);
+    setStatus((bad.length
+      ? `完了(要確認 ${bad.length} 字: ${bad.map((e) => e.char).join("")})`
+      : "完了")
+      + ` — ${cache.miss} 字種を新規描画、${cache.hit} 字種はキャッシュ`);
   } catch (err) {
     setStatus(`失敗: ${err.message}`);
   } finally {
-    $("run").disabled = false;
+    $("run").disabled = $("rerun").disabled = false;
   }
-});
+}
+
+$("run").addEventListener("click", () => run(false));
+$("rerun").addEventListener("click", () => run(true));
 
 async function download(format) {
   const writer = $("writerSel").value;
   const text = $("text").value.trim();
   if (!writer || !text) { setStatus("書き手とテキストを指定してください"); return; }
   setStatus(`${format} を作成中…`);
-  const res = await fetch("/api/export", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ writer, text, smooth: $("smoothChk").checked,
-                           jitter: jitterParams(),
-                           format, char_size_mm: Number($("sizeMm").value) || 15 }),
-  });
+  const job = newJobId();
+  const stop = watchRenderProgress(job, setStatus);
+  let res;
+  try {
+    res = await fetch("/api/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ writer, text, smooth: $("smoothChk").checked,
+                             jitter: jitterParams(),
+                             width_fallback: $("widthChk").checked, job,
+                             format, char_size_mm: Number($("sizeMm").value) || 15 }),
+    });
+  } finally {
+    stop();
+  }
   if (!res.ok) { setStatus(`失敗: ${await res.text()}`); return; }
+  const missing = missingChars(res);
   const blob = await res.blob();
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = format === "svg" ? "nohandwrite.svg" : "nohandwrite.gcode";
   a.click();
   URL.revokeObjectURL(a.href);
-  setStatus("ダウンロードしました");
+  setStatus(missing
+    ? `ダウンロードしました — ただし ${missing} は書けないので空白になっています`
+    : "ダウンロードしました");
 }
 
 $("dlSvg").addEventListener("click", () => download("svg"));
 $("dlGcode").addEventListener("click", () => download("gcode"));
+
+rememberTextarea($("text"), "nhw-text-generate");
 
 async function init() {
   const writers = (await (await fetch("/api/writers")).json()).writers;
@@ -174,6 +246,7 @@ async function init() {
     opt.value = w; opt.textContent = w;
     sel.appendChild(opt);
   }
+  rememberWriter(sel);
   const st = await (await fetch("/api/generate/status")).json();
   if (!st.available)
     setStatus("注意: SDTモデル/データが見つからないため、未入力文字のAI生成は使えません。");
